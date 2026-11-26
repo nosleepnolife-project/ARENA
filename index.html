@@ -895,13 +895,18 @@ function onlineUi(){
  if($('homeOnline'))return;
  const menu=document.querySelector('#home .menu');
  if(menu){const b=document.createElement('button');b.className='menu-item';b.id='homeOnline';b.innerHTML='<div class="menu-icon blue">🌐</div>オンライン対戦';b.onclick=()=>openOnlinePanel();menu.appendChild(b)}
- const style=document.createElement('style');style.textContent=`#onlineOverlay{position:fixed;inset:0;z-index:9999;background:#071827dd;display:none;align-items:center;justify-content:center;padding:18px}#onlineCard{width:min(560px,100%);background:#f8fbff;color:#183246;border:3px solid #244a62;border-radius:18px;padding:22px;box-shadow:0 18px 55px #0008}#onlineCard h2{margin:0 0 8px;font-size:24px}#onlineCard p{line-height:1.65}#onlineCard input{width:100%;box-sizing:border-box;padding:13px;border:2px solid #9ab2c1;border-radius:9px;font-size:18px;margin:8px 0}#onlineCard button{padding:12px 15px;border:0;border-radius:9px;background:#244f6c;color:white;font-weight:800;margin:5px;cursor:pointer}#onlineCard button.secondary{background:#687d89}#onlineStatus{padding:12px;background:#e8f1f7;border-radius:9px;min-height:24px;margin:12px 0;white-space:pre-wrap}#onlineCode{font-size:30px;letter-spacing:5px;font-weight:900;text-align:center;color:#173c57}#onlineActions{display:flex;flex-wrap:wrap;justify-content:center}`;document.head.appendChild(style);
+ const style=document.createElement('style');style.textContent=`#onlineOverlay{position:fixed;inset:0;z-index:9999;background:#071827dd;display:none;align-items:center;justify-content:center;padding:18px}#onlineCard{width:min(560px,100%);background:#f8fbff;color:#183246;border:3px solid #244a62;border-radius:18px;padding:22px;box-shadow:0 18px 55px #0008}#onlineCard h2{margin:0 0 8px;font-size:24px}#onlineCard p{line-height:1.65}#onlineCard input{width:100%;box-sizing:border-box;padding:13px;border:2px solid #9ab2c1;border-radius:9px;font-size:18px;margin:8px 0}#onlineCard button{padding:12px 15px;border:0;border-radius:9px;background:#244f6c;color:white;font-weight:800;margin:5px;cursor:pointer}#onlineCard button:disabled{opacity:.55;cursor:not-allowed}#onlineCard button.secondary{background:#687d89}#onlineStatus{padding:12px;background:#e8f1f7;border-radius:9px;min-height:24px;margin:12px 0;white-space:pre-wrap}#onlineCode{font-size:30px;letter-spacing:5px;font-weight:900;text-align:center;color:#173c57}#onlineActions{display:flex;flex-wrap:wrap;justify-content:center}`;document.head.appendChild(style);
  const ov=document.createElement('div');ov.id='onlineOverlay';ov.innerHTML=`<div id="onlineCard"><h2>ONLINE ARENA</h2><p>友達とはルームコードで、知らない相手とはランダムマッチングで対戦できます。</p><div id="onlineStatus">Firebaseに接続しています…</div><div id="onlineCode"></div><div id="onlineActions"><button id="onlineCreate">ルームを作成</button><button id="onlineRandom">ランダムマッチング</button></div><input id="onlineJoinCode" maxlength="8" inputmode="numeric" placeholder="友達のルームコード（8桁）"><div id="onlineActions"><button id="onlineJoin">コードで参加</button><button id="onlineCancel" class="secondary">閉じる</button></div></div>`;document.body.appendChild(ov);
  $('onlineCancel').onclick=closeOnlinePanel;$('onlineCreate').onclick=createOnlineRoom;$('onlineJoin').onclick=joinOnlineRoom;$('onlineRandom').onclick=startOnlineMatchmaking;
 }
 function onlineStatus(t){if($('onlineStatus'))$('onlineStatus').textContent=t}
-function openOnlinePanel(){onlineUi();$('onlineOverlay').style.display='flex';connectFirebaseOnline()}
-function closeOnlinePanel(){if(onlineSession||onlineQueueUnsub)leaveOnlineRoom();$('onlineOverlay').style.display='none'}
+function setOnlineBusy(busy){
+ if($('onlineCreate'))$('onlineCreate').disabled=busy;
+ if($('onlineJoin'))$('onlineJoin').disabled=busy;
+ if($('onlineRandom'))$('onlineRandom').disabled=busy;
+}
+function openOnlinePanel(){onlineUi();setOnlineBusy(false);$('onlineOverlay').style.display='flex';connectFirebaseOnline()}
+function closeOnlinePanel(){if(onlineSession||onlineQueueUnsub)leaveOnlineRoom();setOnlineBusy(false);$('onlineOverlay').style.display='none'}
 async function connectFirebaseOnline(){
  try{
   if(!window.firebase)throw new Error('Firebase SDKを読み込めません。インターネット接続を確認してください。');
@@ -912,7 +917,7 @@ async function connectFirebaseOnline(){
   onlineStatus('接続済み。匿名認証OK：'+onlineUser.uid.slice(0,8));
  }catch(e){onlineStatus('接続エラー：'+(e.message||e)+'\nFirebase Authenticationの匿名ログインとRealtime Databaseのルールを確認してください。')}
 }
-// Firebase Realtime Database cannot store undefined values. Clean every object before writing.
+// Firebase Realtime Database cannot store undefined or NaN/Infinity values. Clean every object before writing.
 function onlineFirebaseSafe(value){
  if(value===undefined||typeof value==='function')return undefined;
  if(typeof value==='number')return Number.isFinite(value)?value:null;
@@ -921,9 +926,10 @@ function onlineFirebaseSafe(value){
  const result={};for(const key of Object.keys(value)){const v=onlineFirebaseSafe(value[key]);if(v!==undefined)result[key]=v;}return result;
 }
 function currentOnlineBuild(){
- const source=builds[buildIndex]||builds[0]||[];
- const items=Array.isArray(source)?source.map(x=>onlineFirebaseSafe(x||{})):[];
- return onlineFirebaseSafe({items,color:color||'#8bd5ff',orn:orn||'star',buildIndex:Number.isFinite(buildIndex)?buildIndex:0});
+ const idx=Number.isFinite(buildIndex)?buildIndex:0;
+ const source=Array.isArray(builds?.[idx])?builds[idx]:(Array.isArray(builds?.[0])?builds[0]:[]);
+ const items=source.map(x=>onlineFirebaseSafe(x||{})).filter(x=>x!==undefined);
+ return onlineFirebaseSafe({items,color:color||'#8bd5ff',orn:orn||'star',buildIndex:idx});
 }
 function makeRoomCode(){return String(Math.floor(10000000+Math.random()*90000000))}
 let onlineHostStarting=false;
@@ -934,10 +940,20 @@ function listenOnlineRoom(code,isHost){
   const d=snap.val();if(!d)return;
   if(isHost&&d.guestUid&&d.status==='waiting'&&!onlineHostStarting){
    onlineHostStarting=true;
-   ref.update({status:'playing',startedAt:firebase.database.ServerValue.TIMESTAMP}).then(()=>startOnlineBattle(true,Array.isArray(d.guestBuild)?d.guestBuild:[],d.guestColor||'#ffc1c8',d.guestOrn||'star')).catch(e=>{onlineHostStarting=false;onlineStatus('対戦開始エラー：'+e.message)});
+   ref.update({status:'playing',startedAt:firebase.database.ServerValue.TIMESTAMP})
+    .then(()=>startOnlineBattle(true,Array.isArray(d.guestBuild)?d.guestBuild:[],d.guestColor||'#ffc1c8',d.guestOrn||'star'))
+    .catch(e=>{onlineHostStarting=false;onlineStatus('対戦開始エラー：'+e.message)});
   }
   if(!isHost&&d.status==='playing'&&d.snapshot){
-   if(!onlineSession?.started){onlineSession={...onlineSession,started:true,isHost:false,code};gameMode='online';document.querySelector('#battle .hp-row b').textContent='HOST';document.querySelector('#battle .hp-row b:last-child').textContent='GUEST';$('onlineOverlay').style.display='none';go('battle');$('battlelog').textContent='オンライン対戦 ／ ルーム '+code;}
+   if(!onlineSession?.started){
+    onlineSession={...onlineSession,started:true,isHost:false,code};
+    gameMode='online';
+    document.querySelector('#battle .hp-row b').textContent='HOST';
+    document.querySelector('#battle .hp-row b:last-child').textContent='GUEST';
+    $('onlineOverlay').style.display='none';
+    go('battle');
+    $('battlelog').textContent='オンライン対戦 ／ ルーム '+code;
+   }
    try{battle=d.snapshot;drawBattle();}catch(e){console.warn('snapshot render',e)}
   }
   if(!isHost&&d.status==='finished'&&d.result){
@@ -949,47 +965,119 @@ function listenOnlineRoom(code,isHost){
  onlineRoomUnsub=()=>ref.off('value',cb);
 }
 async function createOnlineRoom(){
- try{await connectFirebaseOnline();if(!onlineUser||!onlineDb)return;
+ setOnlineBusy(true);
+ try{
+  await connectFirebaseOnline();if(!onlineUser||!onlineDb)return;
+  if(onlineSession||onlineQueueUnsub)await leaveOnlineRoom();
+  onlineHostStarting=false;
   const code=makeRoomCode(),b=currentOnlineBuild();
-  await onlineDb.ref('rooms/'+code).set({hostUid:onlineUser.uid,guestUid:null,hostBuild:b.items,hostColor:b.color,hostOrn:b.orn,guestBuild:null,status:'waiting',createdAt:firebase.database.ServerValue.TIMESTAMP,stage:stageKey});
-  onlineSession={code,isHost:true,status:'waiting',started:false};$('onlineCode').textContent=code;onlineStatus('ルームを作成したよ！この8桁のコードを友達に送ってね。相手の参加を待っています…');listenOnlineRoom(code,true);
- }catch(e){onlineStatus('ルーム作成エラー：'+e.message+'\nRealtime Databaseのセキュリティルールを確認してください。')}
+  const payload=onlineFirebaseSafe({
+   hostUid:onlineUser.uid,
+   guestUid:null,
+   hostBuild:b.items,
+   hostColor:b.color,
+   hostOrn:b.orn,
+   guestBuild:null,
+   status:'waiting',
+   createdAt:firebase.database.ServerValue.TIMESTAMP,
+   stage:stageKey||'grass'
+  });
+  await onlineDb.ref('rooms/'+code).set(payload);
+  onlineSession={code,isHost:true,status:'waiting',started:false};
+  $('onlineCode').textContent=code;
+  onlineStatus('ルームを作成したよ！この8桁のコードを友達に送ってね。相手の参加を待っています…');
+  listenOnlineRoom(code,true);
+ }catch(e){
+  onlineStatus('ルーム作成エラー：'+(e.message||e)+'\nRealtime Databaseのセキュリティルールを確認してください。');
+ }finally{
+  setOnlineBusy(false);
+ }
 }
 async function joinOnlineRoom(){
+ setOnlineBusy(true);
  try{
   await connectFirebaseOnline();if(!onlineUser||!onlineDb)return;
   const code=String($('onlineJoinCode').value||'').replace(/\D/g,'');
   if(code.length!==8){onlineStatus('8桁のルームコードを入力してね。');return}
-  const ref=onlineDb.ref('rooms/'+code),b=currentOnlineBuild();
+  if(onlineSession||onlineQueueUnsub)await leaveOnlineRoom();
+
+  const ref=onlineDb.ref('rooms/'+code);
+  // 1. まずサーバーから最新の部屋データを取得して存在・参加条件を確認し、ローカルキャッシュも同期する
+  const preSnap=await ref.get();
+  if(!preSnap.exists()){
+   onlineStatus('ルームが見つかりません。8桁のコードが正しいか確認してね。');
+   return;
+  }
+  const current=preSnap.val()||{};
+  if(current.hostUid===onlineUser.uid){
+   onlineStatus('自分が作成したルームには参加できません。');
+   return;
+  }
+  if(current.status!=='waiting'){
+   onlineStatus('このルームはすでに対戦中か終了しています。');
+   return;
+  }
+  if(current.guestUid){
+   onlineStatus('このルームはすでに満員です。');
+   return;
+  }
+
+  // 2. 同時参加競合を防ぐためtransactionで原子的にゲスト情報を書き込む
+  const b=currentOnlineBuild();
+  let rejectReason='';
   const result=await ref.transaction(d=>{
-   if(!d||d.status!=='waiting'||d.guestUid||d.hostUid===onlineUser.uid)return;
-   d.guestUid=onlineUser.uid;d.guestBuild=b.items;d.guestColor=b.color;d.guestOrn=b.orn;
-   return onlineFirebaseSafe(d);
-  });
-  if(!result||!result.committed){onlineStatus('参加できませんでした。コードが違うか、満員・試合開始済みです。');return}
+   // Firebase RTDBのtransactionは未キャッシュ時に初回nullを渡すため、nullを返してサーバー値で再試行させる
+   if(d===null)return null;
+   if(!d.hostUid){rejectReason='ルームデータが見つかりません。';return}
+   if(d.hostUid===onlineUser.uid){rejectReason='自分が作成したルームには参加できません。';return}
+   if(d.status!=='waiting'){rejectReason='このルームはすでに対戦中か終了しています。';return}
+   if(d.guestUid){rejectReason='このルームはすでに満員です。';return}
+   return onlineFirebaseSafe({
+    ...d,
+    guestUid:onlineUser.uid,
+    guestBuild:b.items,
+    guestColor:b.color,
+    guestOrn:b.orn,
+    joinedAt:firebase.database.ServerValue.TIMESTAMP
+   });
+  },undefined,false);
+
+  if(!result||!result.committed||!result.snapshot?.val()){
+   onlineStatus(rejectReason||'参加できませんでした。コードが違うか、満員・試合開始済みです。');
+   return;
+  }
   onlineSession={code,isHost:false,status:'waiting',started:false};
-  $('onlineCode').textContent=code;onlineStatus('ルームに参加したよ！ホストが試合を開始するまで待ってね。');listenOnlineRoom(code,false);
- }catch(e){onlineStatus('参加エラー：'+e.message+'\nFirebaseのRealtime Databaseルールで、ログイン済みユーザーのrooms読み書きが許可されているか確認してください。')}
+  $('onlineCode').textContent=code;
+  onlineStatus('ルームに参加したよ！ホストが試合を開始するまで待ってね。');
+  listenOnlineRoom(code,false);
+ }catch(e){
+  onlineStatus('参加エラー：'+(e.message||e)+'\nFirebaseのRealtime Databaseルールで、ログイン済みユーザーのrooms読み書きが許可されているか確認してください。');
+ }finally{
+  setOnlineBusy(false);
+ }
 }
 async function startOnlineMatchmaking(){
+ setOnlineBusy(true);
  try{await connectFirebaseOnline();if(!onlineUser||!onlineDb)return;
+  if(onlineSession||onlineQueueUnsub)await leaveOnlineRoom();
+  onlineHostStarting=false;
   const qref=onlineDb.ref('matchQueue'),myRef=qref.child(onlineUser.uid);const myBuild=currentOnlineBuild();await myRef.set(onlineFirebaseSafe({uid:onlineUser.uid,createdAt:firebase.database.ServerValue.TIMESTAMP,build:myBuild.items,color:myBuild.color,orn:myBuild.orn,status:'waiting'}));
-  onlineStatus('対戦相手を探しています…\nマッチング中はこの画面を閉じないでね。');$('onlineCreate').disabled=$('onlineJoin').disabled=true;
+  onlineStatus('対戦相手を探しています…\nマッチング中はこの画面を閉じないでね。');
   const cb=qref.on('value',async snap=>{
    const all=snap.val()||{};const candidates=Object.values(all).filter(x=>x&&x.uid!==onlineUser.uid&&x.status==='waiting'&&!x.roomCode&&Array.isArray(x.build)).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
    if(!candidates.length)return;
    const other=candidates[0];if(!Array.isArray(other.build)||onlineUser.uid.localeCompare(other.uid)>0)return;
    const code=makeRoomCode(),my=currentOnlineBuild();
    try{
-    const updates={};updates['rooms/'+code]=onlineFirebaseSafe({hostUid:onlineUser.uid,guestUid:other.uid,hostBuild:my.items,hostColor:my.color,hostOrn:my.orn,guestBuild:other.build,guestColor:other.color,guestOrn:other.orn,status:'playing',createdAt:firebase.database.ServerValue.TIMESTAMP,stage:stageKey});
+    const updates={};updates['rooms/'+code]=onlineFirebaseSafe({hostUid:onlineUser.uid,guestUid:other.uid,hostBuild:my.items,hostColor:my.color,hostOrn:my.orn,guestBuild:other.build,guestColor:other.color,guestOrn:other.orn,status:'playing',createdAt:firebase.database.ServerValue.TIMESTAMP,stage:stageKey||'grass'});
     updates['matchQueue/'+onlineUser.uid+'/roomCode']=code;updates['matchQueue/'+other.uid+'/roomCode']=code;updates['matchQueue/'+onlineUser.uid+'/status']='paired';updates['matchQueue/'+other.uid+'/status']='paired';
     await onlineDb.ref().update(updates);
-    onlineSession={code,isHost:true,status:'playing',started:false};onlineQueueUnsub&&onlineQueueUnsub();onlineQueueUnsub=null;myRef.remove();listenOnlineRoom(code,true);startOnlineBattle(true,other.build,other.color,other.orn);
+    onlineSession={code,isHost:true,status:'playing',started:false};onlineQueueUnsub&&onlineQueueUnsub();onlineQueueUnsub=null;myRef.remove();setOnlineBusy(false);listenOnlineRoom(code,true);startOnlineBattle(true,other.build,other.color,other.orn);
    }catch(e){onlineStatus('マッチングエラー：'+e.message)}
   });onlineQueueUnsub=()=>qref.off('value',cb);
-  const pairedCb=myRef.child('roomCode').on('value',async ss=>{const code=ss.val();if(!code||onlineSession?.code===code)return;const room=(await onlineDb.ref('rooms/'+code).get()).val();if(!room)return;onlineSession={code,isHost:false,status:'playing',started:false};onlineQueueUnsub&&onlineQueueUnsub();onlineQueueUnsub=null;myRef.remove();listenOnlineRoom(code,false)});
+  const pairedCb=myRef.child('roomCode').on('value',async ss=>{const code=ss.val();if(!code||onlineSession?.code===code)return;const room=(await onlineDb.ref('rooms/'+code).get()).val();if(!room)return;onlineSession={code,isHost:false,status:'playing',started:false};onlineQueueUnsub&&onlineQueueUnsub();onlineQueueUnsub=null;myRef.remove();setOnlineBusy(false);listenOnlineRoom(code,false)});
   const oldUnsub=onlineQueueUnsub;onlineQueueUnsub=()=>{oldUnsub&&oldUnsub();myRef.child('roomCode').off('value',pairedCb)};
- }catch(e){onlineStatus('マッチングエラー：'+e.message)}
+ }catch(e){setOnlineBusy(false);onlineStatus('マッチングエラー：'+e.message)}
 }
 function startOnlineBattle(isHost,enemyItems,enemyColor='#ffc1c8',enemyOrn='star'){
  if(!isHost||!onlineSession)return;
@@ -1011,8 +1099,17 @@ function showOnlineResult(result){
  $('outcome').textContent=result.winner===0?'HOST WIN!':result.winner===1?'GUEST WIN!':'DRAW';$('summary').textContent='オンライン対戦 ／ '+(result.winner===0?'ホストの勝利':result.winner===1?'ゲストの勝利':'引き分け');$('detailStats').textContent='対戦相手とのオンラインバトルが終了しました。';$('nextRound').style.display='none';$('rematchBtn').style.display='none';$('replayBtn').style.display='none';go('result');
 }
 async function leaveOnlineRoom(){
- try{if(onlineRoomUnsub){onlineRoomUnsub();onlineRoomUnsub=null}if(onlineQueueUnsub){onlineQueueUnsub();onlineQueueUnsub=null}if(onlineSession?.code&&onlineDb){const ref=onlineDb.ref('rooms/'+onlineSession.code);if(onlineSession.isHost)await ref.update({status:'closed'});else await ref.child('guestUid').remove()}if(onlineUser&&onlineDb)await onlineDb.ref('matchQueue/'+onlineUser.uid).remove()}catch(e){console.warn(e)}
- onlineSession=null;onlineHostStarting=false;
+ try{
+  if(onlineRoomUnsub){onlineRoomUnsub();onlineRoomUnsub=null}
+  if(onlineQueueUnsub){onlineQueueUnsub();onlineQueueUnsub=null}
+  if(onlineSession?.code&&onlineDb){
+   const ref=onlineDb.ref('rooms/'+onlineSession.code);
+   if(onlineSession.isHost)await ref.update({status:'closed'});
+   else await ref.update({guestUid:null,guestBuild:null,guestColor:null,guestOrn:null});
+  }
+  if(onlineUser&&onlineDb)await onlineDb.ref('matchQueue/'+onlineUser.uid).remove();
+ }catch(e){console.warn(e)}
+ onlineSession=null;onlineHostStarting=false;setOnlineBusy(false);
 }
 // Host is authoritative: only host advances physics and publishes snapshots.
 const originalFinish=finish;
