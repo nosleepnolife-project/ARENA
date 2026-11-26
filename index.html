@@ -894,7 +894,721 @@ let onlineDb=null,onlineUser=null,onlineSession=null,onlineRoomUnsub=null,online
 let onlineGuestTarget=null,onlineGuestLastFrame=0,onlineGuestSyncAt=0,onlineLastTerrainSig='',onlineTerrainTick=0;
 let onlineFxSeq=0,onlineSeenFx=new Set(),onlineMatchTimer=null,onlineMatchCountdown=null;
 
-// タイトル画面のキャラクターを隠さずにロゴとメニューボタンだけをスタイリッシュに整える
+// ============================================================================
+// ステージ足場強化・ステージ別ギミック・天気システム
+// ============================================================================
+const WEATHER_DEFS={
+ clear:{id:'clear',icon:'☀️',name:'快晴',desc:'安定したコンディション',accent:'#ffe27a'},
+ rain:{id:'rain',icon:'🌧️',name:'豪雨',desc:'雨の重みで銃の弾が落下！',accent:'#6bc5ff'},
+ snow:{id:'snow',icon:'❄️',name:'大雪',desc:'地面と足場が凍結して滑る！',accent:'#bff4ff'},
+ storm:{id:'storm',icon:'🌪️',name:'嵐',desc:'強風で弾と体が流される！',accent:'#b99aff'},
+ fog:{id:'fog',icon:'🌫️',name:'濃霧',desc:'深い霧で視界が悪化！',accent:'#cfdbe3'}
+};
+
+function getStageThemeKind(st){
+ const s=String(st||'grass').toLowerCase();
+ if(s.includes('ice')||s.includes('snow')||s.includes('winter'))return 'ice';
+ if(s.includes('volcano')||s.includes('lava')||s.includes('fire')||s.includes('magma'))return 'volcano';
+ if(s.includes('sky')||s.includes('cloud')||s.includes('wind'))return 'sky';
+ if(s.includes('moon')||s.includes('space')||s.includes('cyber'))return 'space';
+ if(s.includes('desert')||s.includes('sand')||s.includes('ruin'))return 'desert';
+ return 'grass';
+}
+
+function getStageWeatherPool(kind){
+ if(kind==='ice')return['snow','snow','fog','storm','clear'];
+ if(kind==='volcano')return['clear','storm','rain','fog'];
+ if(kind==='sky')return['storm','clear','rain','fog','snow'];
+ if(kind==='space')return['clear','fog','storm','snow'];
+ if(kind==='desert')return['clear','storm','fog','rain'];
+ return['clear','rain','snow','storm','fog'];
+}
+
+function pickNextWeatherType(kind,currentType){
+ const pool=getStageWeatherPool(kind).filter(w=>w!==currentType);
+ if(!pool.length)return currentType==='clear'?'rain':'clear';
+ return pool[Math.floor(Math.random()*pool.length)];
+}
+
+function addBattleBannerEffect(b,x,y,text){
+ if(!b)return;
+ if(!Array.isArray(b.effects))b.effects=[];
+ b.effects.push({x,y,text,t:1.25});
+}
+
+function spawnWeatherOrb(b){
+ if(!b)return;
+ const plats=(b.terrain||[]).filter(o=>o&&!o.broken&&(o.isPlatform||o.type==='platform'));
+ let ox=480,oy=175;
+ if(plats.length&&Math.random()<0.75){
+  const p=plats[Math.floor(Math.random()*plats.length)];
+  ox=Math.round(p.x+p.w*0.5);
+  oy=Math.round(p.y-28);
+ }else{
+  ox=260+Math.round(Math.random()*440);
+  oy=155+Math.round(Math.random()*75);
+ }
+ const kind=getStageThemeKind(b.stage);
+ const targetType=pickNextWeatherType(kind,b.weather?.type||'clear');
+ b.weatherOrb={x:ox,y:oy,r:17,targetType,pulse:0};
+}
+
+function applyWeatherChange(b,newType,isArtificial=false){
+ if(!b)return;
+ const def=WEATHER_DEFS[newType]||WEATHER_DEFS.clear;
+ const prev=b.weather||{};
+ b.weather={
+  type:def.id,
+  windDir:Math.random()<0.5?-1:1,
+  timer:0,
+  nextChange:10+Math.random()*4.5,
+  bannerTimer:2.8,
+  bannerText:(isArtificial?'🌈 人工気象変化！ ':'⛅ 天気変化！ ')+def.icon+' '+def.name+'（'+def.desc+'）',
+  freezeLevel:def.id==='snow'?1:(prev.freezeLevel||0)
+ };
+ if(b.camera)b.camera.flash=Math.max(b.camera.flash||0,0.22);
+ addBattleBannerEffect(b,480,108,(isArtificial?'人工気象: ':'天気: ')+def.icon+' '+def.name);
+ if(Array.isArray(b.particles)){
+  for(let i=0;i<16;i++){
+   const ang=Math.PI*2*i/16,sp=80+Math.random()*140;
+   b.particles.push({x:480,y:135,vx:Math.cos(ang)*sp,vy:Math.sin(ang)*sp,t:0.55,color:def.accent});
+  }
+ }
+}
+
+// ステージごとの壊れない足場＆固有ギミックを構築
+function setupStagePlatformsAndGimmicks(b){
+ if(!b)return;
+ const kind=getStageThemeKind(b.stage);
+ if(!Array.isArray(b.terrain))b.terrain=[];
+
+ // 既存の宙に浮いているブロックは壊れない足場へ変換し、低すぎる障害物は整理
+ for(const o of b.terrain){
+  if(!o)continue;
+  if(o.y<=275||o.type==='platform'){
+   o.type='platform';
+   o.isPlatform=true;
+   o.unbreakable=true;
+   o.broken=false;
+   o.hp=99999;
+   o.maxHp=99999;
+   if(o.w<115)o.w=125;
+   o.h=14;
+  }
+ }
+
+ const existingPlats=b.terrain.filter(o=>o&&!o.broken&&o.isPlatform);
+ const addPlat=(x,y,w,moveRange=0,moveSpeed=0)=>{
+  b.terrain.push({
+   x,y,w,h:14,hp:99999,maxHp:99999,
+   type:'platform',broken:false,isPlatform:true,unbreakable:true,
+   baseX:x,moveRange,moveSpeed,phase:Math.random()*Math.PI*2
+  });
+ };
+
+ // 足場が不足している場合はステージ特性に合わせた2段構成の足場を追加
+ if(existingPlats.length<2){
+  if(kind==='sky'){
+   addPlat(190,225,145,45,1.6);
+   addPlat(625,225,145,45,1.6);
+   addPlat(405,155,150,60,1.2);
+  }else if(kind==='volcano'){
+   addPlat(180,220,155,0,0);
+   addPlat(625,220,155,0,0);
+   addPlat(395,155,170,0,0);
+  }else{
+   addPlat(185,222,150,0,0);
+   addPlat(625,222,150,0,0);
+   addPlat(410,154,140,0,0);
+  }
+ }
+
+ // ステージ固有ギミック初期化
+ const g={kind,springs:[],geysers:[],updrafts:[],icicles:[],quicksand:null,bumper:null,timer:0};
+ if(kind==='grass'){
+  g.springs.push({x:255,y:310,cool:0},{x:705,y:310,cool:0});
+ }else if(kind==='sky'){
+  g.updrafts.push({x:480,w:110});
+ }else if(kind==='volcano'){
+  g.geysers.push({x:340,state:'idle',t:2.2},{x:620,state:'idle',t:4.5});
+ }else if(kind==='ice'){
+  g.icicles.push({x:320,y:35,vy:0,state:'wait',t:2.5},{x:640,y:35,vy:0,state:'wait',t:4.8});
+ }else if(kind==='space'){
+  g.bumper={x:480,y:215,r:24,pulse:0};
+ }else if(kind==='desert'){
+  g.quicksand={x:480,w:170};
+ }
+ b.gimmicks=g;
+
+ // 初期天気と天気変更オーブをセット
+ const initialPool=getStageWeatherPool(kind);
+ const startW=initialPool[Math.floor(Math.random()*initialPool.length)]||'clear';
+ applyWeatherChange(b,startW,false);
+ if(b.weather)b.weather.bannerTimer=2.0;
+ b.weatherOrb=null;
+ b.nextWeatherOrb=3.5;
+ b._prevA_y=b.a?.y||290;
+ b._prevB_y=b.b?.y||290;
+}
+
+if(typeof initTerrain==='function'){
+ const originalInitTerrain=initTerrain;
+ initTerrain=function(b){
+  originalInitTerrain(b);
+  setupStagePlatformsAndGimmicks(b);
+ };
+}
+
+// 毎フレームの足場物理・AIジャンプ・ギミック・天気シミュレーション（ホスト/ローカル実行）
+function stepStageGimmicksAndWeather(b,dt){
+ if(!b||b.finished||dt<=0)return;
+ if(!b.gimmicks||!b.weather)setupStagePlatformsAndGimmicks(b);
+
+ const fighters=[b.a,b.b].filter(Boolean);
+ const plats=(b.terrain||[]).filter(o=>o&&(o.isPlatform||o.type==='platform'));
+
+ // 1. 動く足場の更新＆破壊防止
+ for(const p of plats){
+  p.broken=false;
+  p.hp=99999;
+  p.maxHp=99999;
+  if(p.moveRange>0&&Number.isFinite(p.baseX)){
+   p.phase=(p.phase||0)+(p.moveSpeed||1.4)*dt;
+   const nextX=p.baseX+Math.sin(p.phase)*p.moveRange;
+   p._dx=nextX-p.x;
+   p.x=nextX;
+  }else{
+   p._dx=0;
+  }
+ }
+
+ // 2. キャラの足場着地・追従・アクティブジャンプAI
+ for(let idx=0;idx<fighters.length;idx++){
+  const f=fighters[idx];
+  const opp=fighters[1-idx];
+  const prevKey=idx===0?'_prevA_y':'_prevB_y';
+  const prevY=Number.isFinite(b[prevKey])?b[prevKey]:f.y;
+  const footR=24;
+
+  if(f.dropTimer>0)f.dropTimer=Math.max(0,f.dropTimer-dt);
+  f._platJumpCool=Math.max(0,(f._platJumpCool||0)-dt);
+
+  // すでに足場に乗っている場合、横幅内なら足場の上に留める
+  if(f.onPlatform){
+   const p=f.onPlatform;
+   const onSpan=f.x>=p.x-14&&f.x<=p.x+p.w+14;
+   if(!onSpan||f.vy<-40||f.dropTimer>0){
+    f.onPlatform=null;
+   }else{
+    f.x=Math.max(75,Math.min(885,f.x+(p._dx||0)));
+    f.y=p.y-footR;
+    f.vy=0;
+   }
+  }
+
+  // 落下中に足場の上面を通過したら着地
+  if(!f.onPlatform&&f.vy>=0&&(f.dropTimer||0)<=0){
+   const prevFoot=prevY+footR;
+   const curFoot=f.y+footR;
+   for(const p of plats){
+    if(f.x>=p.x-14&&f.x<=p.x+p.w+14){
+     if(prevFoot<=p.y+10&&curFoot>=p.y-2){
+      f.y=p.y-footR;
+      f.vy=0;
+      f.onPlatform=p;
+      break;
+     }
+    }
+   }
+  }
+
+  // 足場を活用するジャンプ＆降りる判断
+  const grounded=!!f.onPlatform||f.y>=286;
+  if(grounded&&f._platJumpCool<=0&&(f.stun||0)<=0){
+   // 天気オーブや相手が上の足場にいる、または定期的に高台を取りに行く
+   let wantJump=false;
+   if(b.weatherOrb&&b.weatherOrb.y<f.y-35&&Math.abs(b.weatherOrb.x-f.x)<170)wantJump=true;
+   else if(opp&&opp.y<f.y-45&&Math.abs(opp.x-f.x)<220&&Math.random()<0.08)wantJump=true;
+   else if(!f.onPlatform&&plats.some(p=>Math.abs((p.x+p.w*0.5)-f.x)<145)&&Math.random()<0.024)wantJump=true;
+
+   if(wantJump){
+    f.onPlatform=null;
+    f.vy=-465;
+    f.y-=4;
+    f._platJumpCool=1.55;
+    if(Array.isArray(b.particles)){
+     for(let k=0;k<4;k++)b.particles.push({x:f.x+(Math.random()-.5)*16,y:f.y+22,vx:(Math.random()-.5)*70,vy:20+Math.random()*40,t:0.28,color:'#ffffff'});
+    }
+   }else if(f.onPlatform&&opp&&opp.y>f.y+55&&Math.random()<0.015){
+    // 下にいる相手を追って足場から降りる
+    f.onPlatform=null;
+    f.dropTimer=0.28;
+    f.vy=60;
+    f._platJumpCool=1.2;
+   }
+  }
+
+  b[prevKey]=f.y;
+ }
+
+ // 3. ステージ固有ギミックの動作
+ const g=b.gimmicks;
+ if(g){
+  // ジャンプ台（草原）
+  for(const sp of g.springs||[]){
+   sp.cool=Math.max(0,(sp.cool||0)-dt);
+   for(const f of fighters){
+    if(sp.cool<=0&&Math.abs(f.x-sp.x)<26&&Math.abs((f.y+24)-sp.y)<22&&f.vy>=-60){
+     f.onPlatform=null;
+     f.vy=-580;
+     f.y-=6;
+     sp.cool=0.55;
+     if(Array.isArray(b.hitBursts))b.hitBursts.push({x:sp.x,y:sp.y-6,t:0.28,max:0.28,r:24});
+     addBattleBannerEffect(b,sp.x,sp.y-28,'JUMP!');
+    }
+   }
+  }
+  // 上昇気流（空）
+  for(const up of g.updrafts||[]){
+   for(const f of fighters){
+    if(Math.abs(f.x-up.x)<up.w*0.5){
+     f.onPlatform=null;
+     f.vy-=860*dt;
+    }
+   }
+   for(const q of b.bullets||[]){
+    if(Math.abs(q.x-up.x)<up.w*0.5)q.vy-=520*dt;
+   }
+  }
+  // 溶岩間欠泉（火山）
+  for(const gy of g.geysers||[]){
+   gy.t-=dt;
+   if(gy.state==='idle'&&gy.t<=0){gy.state='warn';gy.t=1.15;}
+   else if(gy.state==='warn'&&gy.t<=0){gy.state='erupt';gy.t=0.85;}
+   else if(gy.state==='erupt'){
+    for(const f of fighters){
+     if(Math.abs(f.x-gy.x)<32&&f.y>165){
+      f.onPlatform=null;
+      f.vy=-520;
+      f.hp=Math.max(1,f.hp-14*dt);
+      f.hurtGlow=0.18;
+     }
+    }
+    if(gy.t<=0){gy.state='idle';gy.t=3.6+Math.random()*1.8;}
+   }
+  }
+  // つららトラップ（氷）
+  for(const ic of g.icicles||[]){
+   ic.t-=dt;
+   if(ic.state==='wait'&&ic.t<=0){
+    const target=fighters[Math.floor(Math.random()*fighters.length)];
+    ic.x=target?Math.max(120,Math.min(840,target.x+(Math.random()-.5)*70)):ic.x;
+    ic.y=42;ic.vy=0;ic.state='warn';ic.t=0.95;
+   }else if(ic.state==='warn'&&ic.t<=0){
+    ic.state='fall';ic.vy=120;
+   }else if(ic.state==='fall'){
+    ic.vy+=760*dt;
+    ic.y+=ic.vy*dt;
+    for(const f of fighters){
+     if(Math.hypot(f.x-ic.x,f.y-ic.y)<32){
+      f.hp=Math.max(1,f.hp-6);
+      f.vx+=(f.x>=ic.x?1:-1)*180;
+      f.hurtGlow=0.25;
+      addBattleBannerEffect(b,ic.x,ic.y,'CHILL! -6');
+      ic.state='wait';ic.t=3.4+Math.random()*1.5;
+      break;
+     }
+    }
+    if(ic.state==='fall'&&ic.y>=310){
+     if(Array.isArray(b.hitBursts))b.hitBursts.push({x:ic.x,y:310,t:0.22,max:0.22,r:18});
+     ic.state='wait';ic.t=3.2+Math.random()*1.6;
+    }
+   }
+  }
+  // 反重力バンパー（宇宙）
+  if(g.bumper){
+   const bm=g.bumper;
+   bm.pulse=Math.max(0,(bm.pulse||0)-dt*2);
+   for(const f of fighters){
+    const dx=f.x-bm.x,dy=f.y-bm.y,dist=Math.hypot(dx,dy);
+    if(dist>0&&dist<bm.r+24){
+     const nx=dx/dist,ny=dy/dist;
+     f.onPlatform=null;
+     f.x=bm.x+nx*(bm.r+26);
+     f.y=bm.y+ny*(bm.r+26);
+     f.vx=nx*420;
+     f.vy=ny*420-80;
+     bm.pulse=1;
+     if(Array.isArray(b.hitBursts))b.hitBursts.push({x:bm.x,y:bm.y,t:0.25,max:0.25,r:34});
+    }
+   }
+  }
+  // 流砂（砂漠）
+  if(g.quicksand){
+   const qs=g.quicksand;
+   for(const f of fighters){
+    if(!f.onPlatform&&f.y>=282&&Math.abs(f.x-qs.x)<qs.w*0.5){
+     f.vx*=Math.pow(0.18,dt);
+     f.x+=(qs.x-f.x)*1.2*dt;
+    }
+   }
+  }
+ }
+
+ // 4. 天気システム（時間経過ランダム変化 ＋ 天気変更オーブ ＋ 物理効果）
+ const w=b.weather;
+ if(w){
+  w.timer=(w.timer||0)+dt;
+  if(w.bannerTimer>0)w.bannerTimer=Math.max(0,w.bannerTimer-dt);
+  if(w.type==='snow')w.freezeLevel=Math.min(1,(w.freezeLevel||0)+dt*0.8);
+  else w.freezeLevel=Math.max(0,(w.freezeLevel||0)-dt*0.45);
+
+  if(w.timer>=(w.nextChange||11)){
+   const nextW=pickNextWeatherType(getStageThemeKind(b.stage),w.type);
+   applyWeatherChange(b,nextW,false);
+  }
+
+  // 天気変更アイテム（オーブ）の出現と取得判定（触れるか弾を当てると天気が変化）
+  if(!b.weatherOrb){
+   b.nextWeatherOrb=(b.nextWeatherOrb??4)-dt;
+   if(b.nextWeatherOrb<=0){
+    spawnWeatherOrb(b);
+    b.nextWeatherOrb=9.5;
+   }
+  }else{
+   const orb=b.weatherOrb;
+   orb.pulse=(orb.pulse||0)+dt*4;
+   let triggered=false;
+   for(const f of fighters){
+    if(Math.hypot(f.x-orb.x,f.y-orb.y)<orb.r+26){
+     triggered=true;
+     break;
+    }
+   }
+   if(!triggered&&Array.isArray(b.bullets)){
+    for(let i=b.bullets.length-1;i>=0;i--){
+     const q=b.bullets[i];
+     if(Math.hypot(q.x-orb.x,q.y-orb.y)<orb.r+12){
+      b.bullets.splice(i,1);
+      triggered=true;
+      break;
+     }
+    }
+   }
+   if(triggered){
+    const nextType=orb.targetType||pickNextWeatherType(getStageThemeKind(b.stage),w.type);
+    if(Array.isArray(b.hitBursts))b.hitBursts.push({x:orb.x,y:orb.y,t:0.35,max:0.35,r:38});
+    b.weatherOrb=null;
+    b.nextWeatherOrb=9.5;
+    applyWeatherChange(b,nextType,true);
+   }
+  }
+
+  // 天気ごとの物理効果
+  if(w.type==='rain'){
+   // 豪雨：銃の弾が雨の重みと下降気流で急降下する
+   for(const q of b.bullets||[]){
+    q.vy=(q.vy||0)+560*dt;
+    q.vx=(q.vx||0)*Math.pow(0.86,dt);
+   }
+  }else if(w.type==='snow'){
+   // 大雪：地面や足場が凍って摩擦が減り、キャラがツルツル滑る
+   for(const f of fighters){
+    const onGroundOrPlat=!!f.onPlatform||f.y>=285;
+    if(onGroundOrPlat){
+     if(Math.abs(f.vx)<24){
+      f.vx+=(f.side||1)*95*dt;
+     }else{
+      f.x=Math.max(75,Math.min(885,f.x+f.vx*0.45*dt));
+      f.vx*=Math.pow(1.22,dt);
+      f.vx=Math.max(-360,Math.min(360,f.vx));
+     }
+    }
+   }
+  }else if(w.type==='storm'){
+   // 嵐：強風でキャラと弾が流され、ときどき落雷
+   const wind=(w.windDir||1);
+   for(const f of fighters){
+    f.vx+=wind*185*dt;
+   }
+   for(const q of b.bullets||[]){
+    q.vx=(q.vx||0)+wind*280*dt;
+   }
+   w._boltCool=(w._boltCool||2.8)-dt;
+   if(w._boltCool<=0){
+    w._boltCool=3.5+Math.random()*2;
+    const lx=180+Math.random()*600;
+    w._boltX=lx;w._boltT=0.22;
+    if(b.camera)b.camera.flash=0.18;
+    for(const f of fighters){
+     if(Math.abs(f.x-lx)<42){
+      f.hp=Math.max(1,f.hp-7);
+      f.vy=-340;f.onPlatform=null;f.hurtGlow=0.3;
+      addBattleBannerEffect(b,lx,f.y-30,'⚡ THUNDER! -7');
+     }
+    }
+   }
+  }
+  if(w._boltT>0)w._boltT=Math.max(0,w._boltT-dt);
+ }
+
+ // 最終位置クランプ
+ for(const f of fighters){
+  f.x=Math.max(75,Math.min(885,f.x));
+  f.y=Math.max(62,Math.min(295,f.y));
+ }
+}
+
+// ワールド座標系の足場装飾・ギミック・天気オーブ描画
+let stageFxClock=0,screenRainDrops=[],screenSnowFlakes=[];
+function ensureScreenWeatherParticles(){
+ if(!screenRainDrops.length){
+  for(let i=0;i<75;i++)screenRainDrops.push({x:Math.random()*960,y:Math.random()*440,l:12+Math.random()*12,sp:540+Math.random()*240});
+ }
+ if(!screenSnowFlakes.length){
+  for(let i=0;i<65;i++)screenSnowFlakes.push({x:Math.random()*960,y:Math.random()*440,r:1.8+Math.random()*2.6,sp:55+Math.random()*55,ph:Math.random()*6.28});
+ }
+}
+
+function drawWorldGimmicksAndWeather(ctx,b){
+ if(!b)return;
+ const w=b.weather||{type:'clear',freezeLevel:0};
+ const g=b.gimmicks;
+
+ // 1. 足場のビジュアル補強＆凍結コーティング
+ for(const o of b.terrain||[]){
+  if(!o||o.broken||!(o.isPlatform||o.type==='platform'))continue;
+  ctx.save();
+  ctx.fillStyle='#5c3d28';
+  ctx.fillRect(o.x,o.y,o.w,o.h);
+  ctx.fillStyle='#8b5e3c';
+  ctx.fillRect(o.x+2,o.y+2,o.w-4,5);
+  ctx.strokeStyle='#2c1b10';
+  ctx.lineWidth=1.5;
+  ctx.strokeRect(o.x,o.y,o.w,o.h);
+  if((w.freezeLevel||0)>0.05){
+   ctx.fillStyle=`rgba(185,244,255,${0.75*w.freezeLevel})`;
+   ctx.fillRect(o.x-1,o.y-2,o.w+2,5);
+  }
+  ctx.restore();
+ }
+
+ // 2. 地面の凍結レイヤー（大雪時）
+ if((w.freezeLevel||0)>0.05){
+  ctx.save();
+  ctx.fillStyle=`rgba(195,246,255,${0.55*w.freezeLevel})`;
+  ctx.fillRect(40,312,880,10);
+  ctx.restore();
+ }
+
+ // 3. ステージ固有ギミックの描画
+ if(g){
+  for(const sp of g.springs||[]){
+   const compressed=(sp.cool||0)>0.35;
+   ctx.save();
+   ctx.fillStyle='#ff5964';
+   ctx.fillRect(sp.x-18,sp.y-(compressed?4:9),36,compressed?4:9);
+   ctx.fillStyle='#ffe74c';
+   ctx.fillRect(sp.x-20,sp.y-(compressed?6:12),40,4);
+   ctx.restore();
+  }
+  for(const up of g.updrafts||[]){
+   ctx.save();
+   const grad=ctx.createLinearGradient(0,320,0,70);
+   grad.addColorStop(0,'rgba(155,235,255,0.22)');
+   grad.addColorStop(1,'rgba(155,235,255,0)');
+   ctx.fillStyle=grad;
+   ctx.fillRect(up.x-up.w*0.5,70,up.w,250);
+   ctx.restore();
+  }
+  for(const gy of g.geysers||[]){
+   if(gy.state==='warn'){
+    ctx.save();
+    ctx.fillStyle='rgba(255,95,30,0.45)';
+    ctx.fillRect(gy.x-26,304,52,12);
+    ctx.restore();
+   }else if(gy.state==='erupt'){
+    ctx.save();
+    const grad=ctx.createLinearGradient(0,315,0,155);
+    grad.addColorStop(0,'rgba(255,70,20,0.92)');
+    grad.addColorStop(1,'rgba(255,215,70,0.15)');
+    ctx.fillStyle=grad;
+    ctx.fillRect(gy.x-28,155,56,160);
+    ctx.restore();
+   }
+  }
+  for(const ic of g.icicles||[]){
+   if(ic.state==='warn'||ic.state==='fall'){
+    ctx.save();
+    ctx.fillStyle=ic.state==='warn'?'rgba(140,235,255,0.65)':'#aef2ff';
+    ctx.beginPath();
+    ctx.moveTo(ic.x-10,ic.y-16);
+    ctx.lineTo(ic.x+10,ic.y-16);
+    ctx.lineTo(ic.x,ic.y+16);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+   }
+  }
+  if(g.bumper){
+   const bm=g.bumper;
+   const r=bm.r+(bm.pulse||0)*8;
+   ctx.save();
+   ctx.strokeStyle='#6cf5ff';
+   ctx.lineWidth=3;
+   ctx.beginPath();
+   ctx.arc(bm.x,bm.y,r,0,Math.PI*2);
+   ctx.stroke();
+   ctx.fillStyle='rgba(108,245,255,0.22)';
+   ctx.fill();
+   ctx.restore();
+  }
+  if(g.quicksand){
+   const qs=g.quicksand;
+   ctx.save();
+   ctx.fillStyle='rgba(214,162,78,0.65)';
+   ctx.fillRect(qs.x-qs.w*0.5,310,qs.w,12);
+   ctx.restore();
+  }
+ }
+
+ // 4. 天気変更アイテム（オーブ）の描画
+ if(b.weatherOrb){
+  const orb=b.weatherOrb;
+  const bob=Math.sin((orb.pulse||0))*4;
+  const tDef=WEATHER_DEFS[orb.targetType]||WEATHER_DEFS.rain;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(orb.x,orb.y+bob,orb.r+5+Math.sin((orb.pulse||0)*2)*2,0,Math.PI*2);
+  ctx.fillStyle='rgba(255,255,255,0.22)';
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(orb.x,orb.y+bob,orb.r,0,Math.PI*2);
+  ctx.fillStyle='#13304a';
+  ctx.fill();
+  ctx.lineWidth=2.5;
+  ctx.strokeStyle=tDef.accent;
+  ctx.stroke();
+
+  ctx.font='16px sans-serif';
+  ctx.textAlign='center';
+  ctx.textBaseline='middle';
+  ctx.fillText(tDef.icon,orb.x,orb.y+bob+1);
+  ctx.restore();
+ }
+
+ // 5. 嵐の落雷フラッシュ
+ if(w._boltT>0&&Number.isFinite(w._boltX)){
+  ctx.save();
+  ctx.strokeStyle='rgba(255,250,180,0.95)';
+  ctx.lineWidth=4;
+  ctx.beginPath();
+  ctx.moveTo(w._boltX,0);
+  ctx.lineTo(w._boltX-14,110);
+  ctx.lineTo(w._boltX+12,210);
+  ctx.lineTo(w._boltX,315);
+  ctx.stroke();
+  ctx.restore();
+ }
+}
+
+// スクリーン座標系の雨・雪・霧エフェクト＆天気HUDバッジ描画
+function drawScreenWeatherHud(ctx,b){
+ if(!b)return;
+ ensureScreenWeatherParticles();
+ const now=performance.now();
+ const dt=stageFxClock?Math.min(0.05,(now-stageFxClock)/1000):0.016;
+ stageFxClock=now;
+
+ const w=b.weather||{type:'clear'};
+ const def=WEATHER_DEFS[w.type]||WEATHER_DEFS.clear;
+
+ ctx.save();
+ if(w.type==='rain'){
+  ctx.strokeStyle='rgba(155,215,255,0.52)';
+  ctx.lineWidth=1.5;
+  ctx.beginPath();
+  for(const d of screenRainDrops){
+   d.y+=d.sp*dt;
+   d.x-=65*dt;
+   if(d.y>440){d.y=-15;d.x=Math.random()*980;}
+   if(d.x<0)d.x+=960;
+   ctx.moveTo(d.x,d.y);
+   ctx.lineTo(d.x-3,d.y+d.l);
+  }
+  ctx.stroke();
+ }else if(w.type==='snow'){
+  ctx.fillStyle='rgba(255,255,255,0.82)';
+  for(const s of screenSnowFlakes){
+   s.ph+=dt*2.2;
+   s.y+=s.sp*dt;
+   s.x+=Math.sin(s.ph)*28*dt;
+   if(s.y>440){s.y=-8;s.x=Math.random()*960;}
+   ctx.beginPath();
+   ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
+   ctx.fill();
+  }
+ }else if(w.type==='storm'){
+  const wd=w.windDir||1;
+  ctx.strokeStyle='rgba(195,180,255,0.45)';
+  ctx.lineWidth=1.6;
+  ctx.beginPath();
+  for(const d of screenRainDrops){
+   d.y+=d.sp*0.85*dt;
+   d.x+=wd*460*dt;
+   if(d.y>440)d.y=-15;
+   if(d.x>960)d.x-=960;
+   if(d.x<0)d.x+=960;
+   ctx.moveTo(d.x,d.y);
+   ctx.lineTo(d.x+wd*14,d.y+8);
+  }
+  ctx.stroke();
+ }else if(w.type==='fog'){
+  const grad=ctx.createLinearGradient(0,60,0,400);
+  grad.addColorStop(0,'rgba(215,228,236,0.18)');
+  grad.addColorStop(0.55,'rgba(215,228,236,0.42)');
+  grad.addColorStop(1,'rgba(215,228,236,0.22)');
+  ctx.fillStyle=grad;
+  ctx.fillRect(0,0,960,440);
+ }
+
+ // 右上天気バッジ
+ const badgeW=172,badgeH=32,bx=960-badgeW-14,by=12;
+ ctx.fillStyle='rgba(10,26,42,0.78)';
+ ctx.strokeStyle=def.accent;
+ ctx.lineWidth=1.5;
+ ctx.beginPath();
+ if(ctx.roundRect)ctx.roundRect(bx,by,badgeW,badgeH,10);
+ else ctx.rect(bx,by,badgeW,badgeH);
+ ctx.fill();
+ ctx.stroke();
+
+ ctx.fillStyle='#ffffff';
+ ctx.font='bold 13px sans-serif';
+ ctx.textAlign='left';
+ ctx.textBaseline='middle';
+ ctx.fillText(def.icon+' 天気: '+def.name,bx+12,by+badgeH*0.5);
+
+ // 天気切り替わり時のテロップ通知
+ if((w.bannerTimer||0)>0&&w.bannerText){
+  const alpha=Math.min(1,w.bannerTimer*2);
+  ctx.globalAlpha=alpha;
+  ctx.fillStyle='rgba(10,25,40,0.85)';
+  ctx.fillRect(210,52,540,32);
+  ctx.strokeStyle=def.accent;
+  ctx.strokeRect(210,52,540,32);
+  ctx.fillStyle='#ffffff';
+  ctx.font='bold 14px sans-serif';
+  ctx.textAlign='center';
+  ctx.fillText(w.bannerText,480,68);
+ }
+ ctx.restore();
+}
+
+// ============================================================================
+// タイトル画面・UI・オンライン対戦システム
+// ============================================================================
 function polishTitleScreen(){
  if($('arenaTitleTheme'))return;
  const st=document.createElement('style');
@@ -969,7 +1683,6 @@ function polishTitleScreen(){
  if(sub)sub.textContent='CUSTOM PHYSICS BATTLE ARENA';
 }
 
-// 既存のonclickを壊さずにトーナメント表示リセットを追加
 document.querySelectorAll('[data-mode]').forEach(el=>{
  el.addEventListener('click',()=>{
   if(el.dataset.mode!=='tournament'){
@@ -996,15 +1709,26 @@ go=function(nextScreen){
  }
 };
 
-// キャンバスのサイズ・変換行列ずれやカメラNaNによる左上固定を防止
+// 描画フック：カメラ変換を取得して足場・ギミック・天気・HUDを重ねて描画
 const originalDrawBattle=drawBattle;
 drawBattle=function(){
  const arena=$('arena');
+ let ctx=null,rawScale=null,capturedWorldTransform=null;
  if(arena){
   if(arena.width!==960)arena.width=960;
   if(arena.height!==440)arena.height=440;
-  const ctx=arena.getContext('2d');
-  if(ctx)ctx.setTransform(1,0,0,1,0,0);
+  ctx=arena.getContext('2d');
+  if(ctx){
+   ctx.setTransform(1,0,0,1,0,0);
+   rawScale=ctx.scale;
+   ctx.scale=function(sx,sy){
+    const res=rawScale.apply(this,arguments);
+    if(!capturedWorldTransform&&Math.abs(sx-1)>0.001){
+     capturedWorldTransform=ctx.getTransform();
+    }
+    return res;
+   };
+  }
  }
  if(battle){
   if(!battle.camera||typeof battle.camera!=='object'){
@@ -1017,7 +1741,18 @@ drawBattle=function(){
   if(!Number.isFinite(battle.camera.flash))battle.camera.flash=0;
   if(!Number.isFinite(battle.camera.finishTime))battle.camera.finishTime=0;
  }
- originalDrawBattle();
+ try{
+  originalDrawBattle();
+ }finally{
+  if(ctx&&rawScale)ctx.scale=rawScale;
+ }
+ if(ctx&&battle){
+  ctx.save();
+  if(capturedWorldTransform)ctx.setTransform(capturedWorldTransform);
+  drawWorldGimmicksAndWeather(ctx,battle);
+  ctx.restore();
+  drawScreenWeatherHud(ctx,battle);
+ }
 };
 
 function onlineUi(){
@@ -1060,7 +1795,6 @@ function onlineUi(){
    <p class="online-sub">対戦モードを選択してください</p>
    <div id="onlineStatus">サーバーに接続しています…</div>
 
-   <!-- ステップ1：2択画面 -->
    <div id="onlineStepSelect">
     <div class="online-choice-grid">
      <button class="online-choice-btn" id="onlineGoRoom">
@@ -1077,7 +1811,6 @@ function onlineUi(){
     <button id="onlineCancel" class="act secondary">タイトルへ戻る</button>
    </div>
 
-   <!-- ステップ2：部屋の作成 / 参加画面 -->
    <div id="onlineStepRoom" style="display:none">
     <button id="onlineCreate" class="act">新しいルームコードを発行</button>
     <div id="onlineCode"></div>
@@ -1088,7 +1821,6 @@ function onlineUi(){
     <button id="onlineBackFromRoom" class="act secondary">← モード選択へ戻る</button>
    </div>
 
-   <!-- ステップ3：オンラインマッチ検索中画面 -->
    <div id="onlineStepMatch" style="display:none">
     <button id="onlineCancelMatch" class="act secondary">マッチングを中止して戻る</button>
    </div>
@@ -1166,7 +1898,6 @@ function currentOnlineBuild(){
  return onlineFirebaseSafe({items,color:color||'#8bd5ff',orn:orn||'star',buildIndex:idx});
 }
 
-// オンラインマッチで一定時間人が来なかった場合用の強化CPU装備を生成（レベル高め＆武器多め）
 function buildStrongOnlineCpuItems(){
  const player=builds[buildIndex]||[];
  const playerCount=player.length;
@@ -1252,7 +1983,6 @@ function startOnlineCpuFallback(){
  raf=requestAnimationFrame(frame);
 }
 
-// ゲスト側：スナップショット受信と60fps滑らかエフェクト・移動補間
 function normalizeOnlineSnapshot(raw,prevBattle){
  if(!raw||typeof raw!=='object')return null;
  const normFighter=(f,fx,fside,fcol)=>({
@@ -1297,6 +2027,9 @@ function normalizeOnlineSnapshot(raw,prevBattle){
   particles:Array.isArray(prevBattle?.particles)?prevBattle.particles:[],
   powerup:raw.powerup&&typeof raw.powerup==='object'?raw.powerup:null,
   warning:raw.warning&&typeof raw.warning==='object'?raw.warning:null,
+  weather:raw.weather&&typeof raw.weather==='object'?raw.weather:(prevBattle?.weather||{type:'clear',freezeLevel:0}),
+  weatherOrb:raw.weatherOrb&&typeof raw.weatherOrb==='object'?raw.weatherOrb:null,
+  gimmicks:raw.gimmicks&&typeof raw.gimmicks==='object'?raw.gimmicks:(prevBattle?.gimmicks||null),
   camera:cam,
   finished:!!raw.finished,
   defeated:raw.defeated||null
@@ -1327,6 +2060,9 @@ function applyGuestSnapshot(next){
  battle.bullets=next.bullets.map(q=>({...q}));
  battle.powerup=next.powerup;
  battle.warning=next.warning;
+ battle.weather=next.weather;
+ battle.weatherOrb=next.weatherOrb;
+ battle.gimmicks=next.gimmicks;
  battle.finished=next.finished;
  battle.defeated=next.defeated;
 
@@ -1410,6 +2146,8 @@ function stepGuestInterpolation(dt){
   }
   battle.particles=battle.particles.filter(p=>p.t>0);
  }
+ if(battle.weatherOrb)battle.weatherOrb.pulse=(battle.weatherOrb.pulse||0)+dt*4;
+ if(battle.weather?.bannerTimer>0)battle.weather.bannerTimer=Math.max(0,battle.weather.bannerTimer-dt);
  if(battle.camera){
   battle.camera.shake=Math.max(0,(battle.camera.shake||0)-dt*22);
   battle.camera.flash=Math.max(0,(battle.camera.flash||0)-dt);
@@ -1686,7 +2424,7 @@ function buildCompactSnapshot(b,forceTerrain=false){
   stun:f.stun||0,hurtGlow:f.hurtGlow||0,hurtJolt:f.hurtJolt||0,
   items:(f.items||[]).map(it=>({id:it.id,type:it.type,parent:it.parent,x:it.x,y:it.y,angle:it.angle,hp:Math.round(it.hp*10)/10,maxHp:it.maxHp}))
  });
- const terrainList=(b.terrain||[]).map(o=>({x:o.x,y:Math.round(o.y*10)/10,w:o.w,h:o.h,hp:Math.round(o.hp*10)/10,maxHp:o.maxHp,type:o.type,broken:!!o.broken}));
+ const terrainList=(b.terrain||[]).map(o=>({x:Math.round(o.x),y:Math.round(o.y*10)/10,w:o.w,h:o.h,hp:Math.round(o.hp*10)/10,maxHp:o.maxHp,type:o.type,broken:!!o.broken,isPlatform:!!o.isPlatform,unbreakable:!!o.unbreakable}));
  const sig=terrainList.map(o=>`${o.x}:${o.y}:${o.hp}:${o.broken?1:0}`).join('|');
  const sendTerrain=forceTerrain||sig!==onlineLastTerrainSig||(onlineTerrainTick++%12===0);
  if(sendTerrain)onlineLastTerrainSig=sig;
@@ -1706,6 +2444,15 @@ function buildCompactSnapshot(b,forceTerrain=false){
   hitBursts,
   powerup:b.powerup?{kind:b.powerup.kind,x:Math.round(b.powerup.x),y:Math.round(b.powerup.y)}:null,
   warning:b.warning?{type:b.warning.type,t:b.warning.t}:null,
+  weather:b.weather?{
+   type:b.weather.type,windDir:b.weather.windDir||1,
+   freezeLevel:Math.round((b.weather.freezeLevel||0)*100)/100,
+   bannerTimer:Math.round((b.weather.bannerTimer||0)*10)/10,
+   bannerText:b.weather.bannerText||'',
+   _boltX:b.weather._boltX||null,_boltT:b.weather._boltT||0
+  }:null,
+  weatherOrb:b.weatherOrb?{x:b.weatherOrb.x,y:b.weatherOrb.y,r:b.weatherOrb.r,targetType:b.weatherOrb.targetType,pulse:Math.round((b.weatherOrb.pulse||0)*10)/10}:null,
+  gimmicks:b.gimmicks||null,
   camera:{shake:b.camera?.shake||0,flash:b.camera?.flash||0,finishTime:b.camera?.finishTime||0},
   finished:!!b.finished,
   defeated:b.defeated?{x:Math.round(b.defeated.x),y:Math.round(b.defeated.y)}:null
@@ -1724,7 +2471,6 @@ function publishOnlineSnapshot(){
    .finally(()=>{onlinePublishInFlight=false;});
  }catch(e){onlinePublishInFlight=false;console.warn('snapshot serialization',e)}
 }
-// 自分視点で勝敗を分かりやすく表示（ホスト＝0、ゲスト＝1）
 function showOnlineResult(result,isHost=false){
  const mySide=isHost?0:1;
  const verdict=result.winner===-1?'DRAW':(result.winner===mySide?'WIN!':'LOSE');
@@ -1754,7 +2500,6 @@ async function leaveOnlineRoom(){
  }catch(e){console.warn(e)}
  onlineSession=null;onlineHostStarting=false;onlineGuestTarget=null;onlinePublishInFlight=false;setOnlineBusy(false);
 }
-// Host is authoritative: only host advances physics and publishes snapshots.
 const originalFinish=finish;
 finish=function(){
  if(!battle||battle.finished)return;
@@ -1778,10 +2523,10 @@ finish=function(){
   onlineSession=null;onlineHostStarting=false;
  }
 };
-// Guest renders the host's snapshots smoothly at 60fps and never simulates independently.
 const originalFrame=frame;
+let localStageLastFrame=0;
 frame=function(t){
- if(screen!=='battle'||!battle)return;
+ if(screen!=='battle'||!battle){localStageLastFrame=0;return;}
  if(onlineSession&&!onlineSession.isHost){
   const dt=onlineGuestLastFrame?Math.min(0.05,(t-onlineGuestLastFrame)/1000):0.016;
   onlineGuestLastFrame=t;
@@ -1790,7 +2535,12 @@ frame=function(t){
   raf=requestAnimationFrame(frame);
   return;
  }
+ const dt=localStageLastFrame?Math.min(0.05,(t-localStageLastFrame)/1000):0.016;
+ localStageLastFrame=t;
  originalFrame(t);
+ if(battle&&!battle.finished){
+  try{stepStageGimmicksAndWeather(battle,dt);}catch(e){console.warn('stage/weather step',e)}
+ }
  if(onlineSession?.isHost)publishOnlineSnapshot();
 };
 window.addEventListener('beforeunload',()=>{if(onlineSession?.isHost&&onlineDb)onlineDb.ref('rooms/'+onlineSession.code).update({status:'closed'})});
