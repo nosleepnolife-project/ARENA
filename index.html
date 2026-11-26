@@ -890,7 +890,62 @@ const ONLINE_FIREBASE_CONFIG={
  messagingSenderId:'86707291255',
  appId:'1:86707291255:web:01e2e67fa63c3513503272'
 };
-let onlineDb=null,onlineUser=null,onlineSession=null,onlineRoomUnsub=null,onlineQueueUnsub=null,onlinePublishAt=0;
+let onlineDb=null,onlineUser=null,onlineSession=null,onlineRoomUnsub=null,onlineQueueUnsub=null,onlinePublishAt=0,onlinePublishInFlight=false;
+let onlineGuestTarget=null,onlineGuestLastFrame=0;
+
+// 画面遷移時・モード切替時にトーナメント状態が他モードへ残らないよう確実にリセット
+document.querySelectorAll('[data-mode]').forEach(el=>{
+ const prevClick=el.onclick;
+ el.onclick=()=>{
+  if(el.dataset.mode!=='tournament'){
+   tournamentState=null;
+   if($('tournamentPanel'))$('tournamentPanel').style.display='none';
+  }
+  if(prevClick)prevClick();
+ };
+});
+const originalGo=go;
+go=function(nextScreen){
+ if(nextScreen==='home'){
+  gameMode='single';
+  matchWins=[0,0];
+  matchRound=0;
+  tournamentState=null;
+  if($('tournamentPanel'))$('tournamentPanel').style.display='none';
+ }
+ originalGo(nextScreen);
+ if(nextScreen==='battle'){
+  try{window.scrollTo(0,0);}catch(e){}
+ }
+ if(nextScreen==='result'&&gameMode!=='tournament'&&$('tournamentPanel')){
+  $('tournamentPanel').style.display='none';
+ }
+};
+
+// キャンバスのサイズ・変換行列ずれやカメラNaNによる左上固定を防止
+const originalDrawBattle=drawBattle;
+drawBattle=function(){
+ const arena=$('arena');
+ if(arena){
+  if(arena.width!==960)arena.width=960;
+  if(arena.height!==440)arena.height=440;
+  const ctx=arena.getContext('2d');
+  if(ctx)ctx.setTransform(1,0,0,1,0,0);
+ }
+ if(battle){
+  if(!battle.camera||typeof battle.camera!=='object'){
+   battle.camera={shake:0,zoom:0,flash:0,slow:0,x:480,y:220,scale:1.25,finishTime:0};
+  }
+  if(!Number.isFinite(battle.camera.x))battle.camera.x=480;
+  if(!Number.isFinite(battle.camera.y))battle.camera.y=220;
+  if(!Number.isFinite(battle.camera.scale)||battle.camera.scale<=0)battle.camera.scale=1.25;
+  if(!Number.isFinite(battle.camera.shake))battle.camera.shake=0;
+  if(!Number.isFinite(battle.camera.flash))battle.camera.flash=0;
+  if(!Number.isFinite(battle.camera.finishTime))battle.camera.finishTime=0;
+ }
+ originalDrawBattle();
+};
+
 function onlineUi(){
  if($('homeOnline'))return;
  const menu=document.querySelector('#home .menu');
@@ -931,7 +986,7 @@ function currentOnlineBuild(){
  const items=source.map(x=>onlineFirebaseSafe(x||{})).filter(x=>x!==undefined);
  return onlineFirebaseSafe({items,color:color||'#8bd5ff',orn:orn||'star',buildIndex:idx});
 }
-// Firebase RTDB strips empty arrays ([]). Restore all required arrays/fields on the guest side so drawBattle never crashes.
+// Firebase RTDB strips empty arrays ([]). Restore all required arrays/fields on the guest side.
 function normalizeOnlineSnapshot(raw,prevCamera){
  if(!raw||typeof raw!=='object')return null;
  const normFighter=(f,fx,fside,fcol)=>({
@@ -949,9 +1004,17 @@ function normalizeOnlineSnapshot(raw,prevCamera){
   hurtJolt:Number.isFinite(f?.hurtJolt)?f.hurtJolt:0,
   items:Array.isArray(f?.items)?f.items.filter(Boolean):[]
  });
- const cam=prevCamera&&typeof prevCamera==='object'
-  ?{...prevCamera,shake:raw.camera?.shake||0,flash:raw.camera?.flash||0,finishTime:raw.camera?.finishTime||0}
-  :(raw.camera&&typeof raw.camera==='object'?raw.camera:{shake:0,zoom:0,flash:0,x:480,y:220,scale:1.25,finishTime:0});
+ const baseCam=prevCamera&&typeof prevCamera==='object'?prevCamera:{};
+ const cam={
+  x:Number.isFinite(baseCam.x)?baseCam.x:480,
+  y:Number.isFinite(baseCam.y)?baseCam.y:220,
+  scale:Number.isFinite(baseCam.scale)&&baseCam.scale>0?baseCam.scale:1.25,
+  zoom:0,
+  slow:0,
+  shake:Number.isFinite(raw.camera?.shake)?raw.camera.shake:0,
+  flash:Number.isFinite(raw.camera?.flash)?raw.camera.flash:0,
+  finishTime:Number.isFinite(raw.camera?.finishTime)?raw.camera.finishTime:0
+ };
  return {
   ...raw,
   stage:raw.stage||stageKey||'grass',
@@ -970,6 +1033,73 @@ function normalizeOnlineSnapshot(raw,prevCamera){
   finished:!!raw.finished,
   defeated:raw.defeated||null
  };
+}
+// ゲスト側の表示用バトル状態を最新スナップショットへ滑らかに同期（座標は60fps補間）
+function applyGuestSnapshot(next){
+ if(!battle||!onlineSession?.started){
+  battle=next;
+  onlineGuestTarget=next;
+  return;
+ }
+ onlineGuestTarget=next;
+ battle.stage=next.stage;
+ battle.time=next.time;
+ battle.windPhase=next.windPhase;
+ battle.terrain=next.terrain;
+ battle.bullets=next.bullets.map(q=>({...q}));
+ battle.effects=next.effects;
+ battle.hitBursts=next.hitBursts;
+ battle.powerup=next.powerup;
+ battle.warning=next.warning;
+ battle.finished=next.finished;
+ battle.defeated=next.defeated;
+ if(next.camera){
+  battle.camera.shake=Math.max(battle.camera.shake||0,next.camera.shake||0);
+  battle.camera.flash=Math.max(battle.camera.flash||0,next.camera.flash||0);
+  battle.camera.finishTime=next.camera.finishTime||0;
+ }
+ for(const key of ['a','b']){
+  const cur=battle[key],tgt=next[key];
+  if(!cur||!tgt)continue;
+  cur.vx=tgt.vx;cur.vy=tgt.vy;
+  cur.hp=tgt.hp;cur.maxHp=tgt.maxHp;
+  cur.side=tgt.side;cur.color=tgt.color;cur.orn=tgt.orn;
+  cur.stun=tgt.stun;
+  cur.hurtGlow=Math.max(cur.hurtGlow||0,tgt.hurtGlow||0);
+  cur.hurtJolt=Math.max(cur.hurtJolt||0,tgt.hurtJolt||0);
+  cur.items=tgt.items;
+ }
+}
+// ゲスト側で受信間隔の隙間を60fpsで滑らかに補間・予測移動する
+function stepGuestInterpolation(dt){
+ if(!battle||!onlineGuestTarget)return;
+ const alpha=1-Math.exp(-20*dt);
+ for(const key of ['a','b']){
+  const cur=battle[key],tgt=onlineGuestTarget[key];
+  if(!cur||!tgt)continue;
+  const dist=Math.hypot(tgt.x-cur.x,tgt.y-cur.y);
+  if(dist>220){
+   cur.x=tgt.x;cur.y=tgt.y;
+  }else{
+   const predX=Math.max(75,Math.min(885,tgt.x+tgt.vx*0.04));
+   const predY=Math.max(68,Math.min(295,tgt.y+tgt.vy*0.04));
+   cur.x+=(predX-cur.x)*alpha;
+   cur.y+=(predY-cur.y)*alpha;
+  }
+  cur.hurtGlow=Math.max(0,(cur.hurtGlow||0)-dt);
+  cur.hurtJolt=Math.max(0,(cur.hurtJolt||0)-dt);
+ }
+ for(const q of battle.bullets||[]){
+  q.x+=(q.vx||0)*dt;
+  q.y+=(q.vy||0)*dt;
+ }
+ for(const e of battle.effects||[]){
+  e.t=Math.max(0,(e.t||0)-dt);
+ }
+ if(battle.camera){
+  battle.camera.shake=Math.max(0,(battle.camera.shake||0)-dt*22);
+  battle.camera.flash=Math.max(0,(battle.camera.flash||0)-dt);
+ }
 }
 function setOnlineBattleLabels(){
  const labels=document.querySelectorAll('#battle .hp-row b');
@@ -994,7 +1124,11 @@ function listenOnlineRoom(code,isHost){
    if(!onlineSession?.started){
     onlineSession={...onlineSession,started:true,isHost:false,code};
     gameMode='online';
+    tournamentState=null;
+    if($('tournamentPanel'))$('tournamentPanel').style.display='none';
     battle=normalized;
+    onlineGuestTarget=normalized;
+    onlineGuestLastFrame=0;
     setOnlineBattleLabels();
     $('trainExit').style.display='none';
     $('skip').style.display='none';
@@ -1003,7 +1137,7 @@ function listenOnlineRoom(code,isHost){
     $('battlelog').textContent='オンライン対戦 ／ ルーム '+code;
     raf=requestAnimationFrame(frame);
    }else{
-    battle=normalized;
+    applyGuestSnapshot(normalized);
    }
   }
   if(!isHost&&d.status==='finished'&&d.result){
@@ -1094,6 +1228,7 @@ async function joinOnlineRoom(){
    onlineStatus(rejectReason||'参加できませんでした。コードが違うか、満員・試合開始済みです。');
    return;
   }
+  if($('onlineJoinCode'))$('onlineJoinCode').blur();
   onlineSession={code,isHost:false,status:'waiting',started:false};
   $('onlineCode').textContent=code;
   onlineStatus('ルームに参加したよ！ホストが試合を開始するまで待ってね。');
@@ -1129,13 +1264,15 @@ async function startOnlineMatchmaking(){
 }
 function startOnlineBattle(isHost,enemyItems,enemyColor='#ffc1c8',enemyOrn='star'){
  if(!isHost||!onlineSession)return;
-  gameMode='online';matchWins=[0,0];matchRound=0;const mine=currentOnlineBuild();
+  gameMode='online';matchWins=[0,0];matchRound=0;tournamentState=null;
+  if($('tournamentPanel'))$('tournamentPanel').style.display='none';
+  const mine=currentOnlineBuild();
   battle={level:0,a:makeFighter(160,1,mine.items,mine.color,mine.orn),b:makeFighter(800,-1,enemyItems||[],enemyColor||'#ffc1c8',enemyOrn||'star'),time:0,effects:[],hitBursts:[],particles:[],finished:false,stage:stageKey,windFx:0,powerup:null,nextPowerup:5,powerupCount:0,bullets:[]};
   initTerrain(battle);battle.record=[];battle.lastCapture=-1;
   for(const f of [battle.a,battle.b]){f.stats={damage:0,hits:0,clashes:0,stuns:0,broken:0};f.stun=0;f.stunMeter=0;f.clashCool=0}
   battle.a.hp=battle.a.maxHp=100;battle.b.hp=battle.b.maxHp=100;
   $('battlelog').textContent='オンライン対戦 ／ ルーム '+onlineSession.code;setOnlineBattleLabels();$('trainExit').style.display='none';$('skip').style.display='none';
-  onlineSession.started=true;onlineSession.isHost=true;$('onlineOverlay').style.display='none';go('battle');last=0;raf=requestAnimationFrame(frame);
+  onlineSession.started=true;onlineSession.isHost=true;onlinePublishInFlight=false;$('onlineOverlay').style.display='none';go('battle');last=0;raf=requestAnimationFrame(frame);
 }
 function buildCompactSnapshot(b){
  const slimFighter=f=>({
@@ -1159,17 +1296,23 @@ function buildCompactSnapshot(b){
  });
 }
 function publishOnlineSnapshot(){
- if(!onlineSession?.isHost||!battle||!onlineDb)return;
- const now=performance.now();if(now-onlinePublishAt<85)return;onlinePublishAt=now;
+ if(!onlineSession?.isHost||!battle||!onlineDb||onlinePublishInFlight)return;
+ const now=performance.now();if(now-onlinePublishAt<100)return;onlinePublishAt=now;
+ onlinePublishInFlight=true;
  try{
   const snap=buildCompactSnapshot(battle);
-  onlineDb.ref('rooms/'+onlineSession.code).update({snapshot:snap,updatedAt:firebase.database.ServerValue.TIMESTAMP}).catch(e=>console.warn('online publish',e));
- }catch(e){console.warn('snapshot serialization',e)}
+  onlineDb.ref('rooms/'+onlineSession.code).update({snapshot:snap,updatedAt:firebase.database.ServerValue.TIMESTAMP})
+   .catch(e=>console.warn('online publish',e))
+   .finally(()=>{onlinePublishInFlight=false;});
+ }catch(e){onlinePublishInFlight=false;console.warn('snapshot serialization',e)}
 }
 function showOnlineResult(result){
  if(screen==='result'&&$('outcome').textContent===result.label)return;
+ tournamentState=null;onlineGuestTarget=null;
+ if($('tournamentPanel'))$('tournamentPanel').style.display='none';
  $('outcome').textContent=result.winner===0?'HOST WIN!':result.winner===1?'GUEST WIN!':'DRAW';$('summary').textContent='オンライン対戦 ／ '+(result.winner===0?'ホストの勝利':result.winner===1?'ゲストの勝利':'引き分け');$('detailStats').textContent='対戦相手とのオンラインバトルが終了しました。';$('nextRound').style.display='none';$('rematchBtn').style.display='none';$('replayBtn').style.display='none';
- leaveOnlineRoom();
+ if(onlineRoomUnsub){onlineRoomUnsub();onlineRoomUnsub=null}
+ onlineSession=null;onlineHostStarting=false;
  go('result');
 }
 async function leaveOnlineRoom(){
@@ -1183,14 +1326,26 @@ async function leaveOnlineRoom(){
   }
   if(onlineUser&&onlineDb)await onlineDb.ref('matchQueue/'+onlineUser.uid).remove();
  }catch(e){console.warn(e)}
- onlineSession=null;onlineHostStarting=false;setOnlineBusy(false);
+ onlineSession=null;onlineHostStarting=false;onlineGuestTarget=null;onlinePublishInFlight=false;setOnlineBusy(false);
 }
 // Host is authoritative: only host advances physics and publishes snapshots.
 const originalFinish=finish;
-finish=function(){if(!battle||battle.finished)return;originalFinish();if(gameMode==='online'){$('nextRound').style.display='none';$('rematchBtn').style.display='none';$('replayBtn').style.display='none';}if(onlineSession?.isHost&&onlineDb&&battle){const winner=battle.a.hp===battle.b.hp?-1:(battle.a.hp>battle.b.hp?0:1);const result={winner,label:winner===0?'HOST WIN':winner===1?'GUEST WIN':'DRAW'};const snap=buildCompactSnapshot(battle);onlineDb.ref('rooms/'+onlineSession.code).update({status:'finished',result,snapshot:snap,finishedAt:firebase.database.ServerValue.TIMESTAMP}).catch(e=>console.warn(e));leaveOnlineRoom();}}
-// Guest renders the host's snapshots and never simulates independently.
+finish=function(){if(!battle||battle.finished)return;originalFinish();if(gameMode==='online'){$('nextRound').style.display='none';$('rematchBtn').style.display='none';$('replayBtn').style.display='none';if($('tournamentPanel'))$('tournamentPanel').style.display='none';}if(onlineSession?.isHost&&onlineDb&&battle){const winner=battle.a.hp===battle.b.hp?-1:(battle.a.hp>battle.b.hp?0:1);const result={winner,label:winner===0?'HOST WIN':winner===1?'GUEST WIN':'DRAW'};const snap=buildCompactSnapshot(battle);onlineDb.ref('rooms/'+onlineSession.code).update({status:'finished',result,snapshot:snap,finishedAt:firebase.database.ServerValue.TIMESTAMP}).catch(e=>console.warn(e));if(onlineRoomUnsub){onlineRoomUnsub();onlineRoomUnsub=null}onlineSession=null;onlineHostStarting=false;}}
+// Guest renders the host's snapshots smoothly at 60fps and never simulates independently.
 const originalFrame=frame;
-frame=function(t){if(screen!=='battle'||!battle)return;if(onlineSession&&!onlineSession.isHost){try{drawBattle();}catch(e){console.warn('guest draw',e)}raf=requestAnimationFrame(frame);return;}originalFrame(t);if(onlineSession?.isHost)publishOnlineSnapshot()};
+frame=function(t){
+ if(screen!=='battle'||!battle)return;
+ if(onlineSession&&!onlineSession.isHost){
+  const dt=onlineGuestLastFrame?Math.min(0.05,(t-onlineGuestLastFrame)/1000):0.016;
+  onlineGuestLastFrame=t;
+  stepGuestInterpolation(dt);
+  try{drawBattle();}catch(e){console.warn('guest draw',e)}
+  raf=requestAnimationFrame(frame);
+  return;
+ }
+ originalFrame(t);
+ if(onlineSession?.isHost)publishOnlineSnapshot();
+};
 window.addEventListener('beforeunload',()=>{if(onlineSession?.isHost&&onlineDb)onlineDb.ref('rooms/'+onlineSession.code).update({status:'closed'})});
 onlineUi();
 })();
