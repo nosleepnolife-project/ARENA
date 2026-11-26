@@ -895,14 +895,13 @@ let onlineGuestTarget=null,onlineGuestLastFrame=0,onlineGuestSyncAt=0,onlineLast
 let onlineFxSeq=0,onlineSeenFx=new Set(),onlineMatchTimer=null,onlineMatchCountdown=null;
 
 // ============================================================================
-// ステージ足場強化・ステージ別ギミック・天気システム
+// ステージ足場強化・ステージ別ギミック・天気システム（霧なし）
 // ============================================================================
 const WEATHER_DEFS={
  clear:{id:'clear',icon:'☀️',name:'快晴',desc:'安定したコンディション',accent:'#ffe27a'},
  rain:{id:'rain',icon:'🌧️',name:'豪雨',desc:'雨の重みで銃の弾が落下！',accent:'#6bc5ff'},
  snow:{id:'snow',icon:'❄️',name:'大雪',desc:'地面と足場が凍結して滑る！',accent:'#bff4ff'},
- storm:{id:'storm',icon:'🌪️',name:'嵐',desc:'強風で弾と体が流される！',accent:'#b99aff'},
- fog:{id:'fog',icon:'🌫️',name:'濃霧',desc:'深い霧で視界が悪化！',accent:'#cfdbe3'}
+ storm:{id:'storm',icon:'🌪️',name:'嵐',desc:'強風で弾と体が流される！',accent:'#b99aff'}
 };
 
 function getStageThemeKind(st){
@@ -916,12 +915,12 @@ function getStageThemeKind(st){
 }
 
 function getStageWeatherPool(kind){
- if(kind==='ice')return['snow','snow','fog','storm','clear'];
- if(kind==='volcano')return['clear','storm','rain','fog'];
- if(kind==='sky')return['storm','clear','rain','fog','snow'];
- if(kind==='space')return['clear','fog','storm','snow'];
- if(kind==='desert')return['clear','storm','fog','rain'];
- return['clear','rain','snow','storm','fog'];
+ if(kind==='ice')return['snow','snow','storm','clear'];
+ if(kind==='volcano')return['clear','storm','rain'];
+ if(kind==='sky')return['storm','clear','rain','snow'];
+ if(kind==='space')return['clear','storm','snow'];
+ if(kind==='desert')return['clear','storm','rain'];
+ return['clear','rain','snow','storm'];
 }
 
 function pickNextWeatherType(kind,currentType){
@@ -976,13 +975,11 @@ function applyWeatherChange(b,newType,isArtificial=false){
  }
 }
 
-// ステージごとの壊れない足場＆固有ギミックを構築
 function setupStagePlatformsAndGimmicks(b){
  if(!b)return;
  const kind=getStageThemeKind(b.stage);
  if(!Array.isArray(b.terrain))b.terrain=[];
 
- // 既存の宙に浮いているブロックは壊れない足場へ変換し、低すぎる障害物は整理
  for(const o of b.terrain){
   if(!o)continue;
   if(o.y<=275||o.type==='platform'){
@@ -1006,7 +1003,6 @@ function setupStagePlatformsAndGimmicks(b){
   });
  };
 
- // 足場が不足している場合はステージ特性に合わせた2段構成の足場を追加
  if(existingPlats.length<2){
   if(kind==='sky'){
    addPlat(190,225,145,45,1.6);
@@ -1023,7 +1019,6 @@ function setupStagePlatformsAndGimmicks(b){
   }
  }
 
- // ステージ固有ギミック初期化
  const g={kind,springs:[],geysers:[],updrafts:[],icicles:[],quicksand:null,bumper:null,timer:0};
  if(kind==='grass'){
   g.springs.push({x:255,y:310,cool:0},{x:705,y:310,cool:0});
@@ -1040,7 +1035,6 @@ function setupStagePlatformsAndGimmicks(b){
  }
  b.gimmicks=g;
 
- // 初期天気と天気変更オーブをセット
  const initialPool=getStageWeatherPool(kind);
  const startW=initialPool[Math.floor(Math.random()*initialPool.length)]||'clear';
  applyWeatherChange(b,startW,false);
@@ -1059,7 +1053,6 @@ if(typeof initTerrain==='function'){
  };
 }
 
-// 毎フレームの足場物理・AIジャンプ・ギミック・天気シミュレーション（ホスト/ローカル実行）
 function stepStageGimmicksAndWeather(b,dt){
  if(!b||b.finished||dt<=0)return;
  if(!b.gimmicks||!b.weather)setupStagePlatformsAndGimmicks(b);
@@ -1067,7 +1060,6 @@ function stepStageGimmicksAndWeather(b,dt){
  const fighters=[b.a,b.b].filter(Boolean);
  const plats=(b.terrain||[]).filter(o=>o&&(o.isPlatform||o.type==='platform'));
 
- // 1. 動く足場の更新＆破壊防止
  for(const p of plats){
   p.broken=false;
   p.hp=99999;
@@ -1082,7 +1074,6 @@ function stepStageGimmicksAndWeather(b,dt){
   }
  }
 
- // 2. キャラの足場着地・追従・アクティブジャンプAI
  for(let idx=0;idx<fighters.length;idx++){
   const f=fighters[idx];
   const opp=fighters[1-idx];
@@ -1093,7 +1084,6 @@ function stepStageGimmicksAndWeather(b,dt){
   if(f.dropTimer>0)f.dropTimer=Math.max(0,f.dropTimer-dt);
   f._platJumpCool=Math.max(0,(f._platJumpCool||0)-dt);
 
-  // すでに足場に乗っている場合、横幅内なら足場の上に留める
   if(f.onPlatform){
    const p=f.onPlatform;
    const onSpan=f.x>=p.x-14&&f.x<=p.x+p.w+14;
@@ -1106,7 +1096,6 @@ function stepStageGimmicksAndWeather(b,dt){
    }
   }
 
-  // 落下中に足場の上面を通過したら着地
   if(!f.onPlatform&&f.vy>=0&&(f.dropTimer||0)<=0){
    const prevFoot=prevY+footR;
    const curFoot=f.y+footR;
@@ -1122,10 +1111,8 @@ function stepStageGimmicksAndWeather(b,dt){
    }
   }
 
-  // 足場を活用するジャンプ＆降りる判断
   const grounded=!!f.onPlatform||f.y>=286;
   if(grounded&&f._platJumpCool<=0&&(f.stun||0)<=0){
-   // 天気オーブや相手が上の足場にいる、または定期的に高台を取りに行く
    let wantJump=false;
    if(b.weatherOrb&&b.weatherOrb.y<f.y-35&&Math.abs(b.weatherOrb.x-f.x)<170)wantJump=true;
    else if(opp&&opp.y<f.y-45&&Math.abs(opp.x-f.x)<220&&Math.random()<0.08)wantJump=true;
@@ -1140,7 +1127,6 @@ function stepStageGimmicksAndWeather(b,dt){
      for(let k=0;k<4;k++)b.particles.push({x:f.x+(Math.random()-.5)*16,y:f.y+22,vx:(Math.random()-.5)*70,vy:20+Math.random()*40,t:0.28,color:'#ffffff'});
     }
    }else if(f.onPlatform&&opp&&opp.y>f.y+55&&Math.random()<0.015){
-    // 下にいる相手を追って足場から降りる
     f.onPlatform=null;
     f.dropTimer=0.28;
     f.vy=60;
@@ -1151,10 +1137,8 @@ function stepStageGimmicksAndWeather(b,dt){
   b[prevKey]=f.y;
  }
 
- // 3. ステージ固有ギミックの動作
  const g=b.gimmicks;
  if(g){
-  // ジャンプ台（草原）
   for(const sp of g.springs||[]){
    sp.cool=Math.max(0,(sp.cool||0)-dt);
    for(const f of fighters){
@@ -1168,7 +1152,6 @@ function stepStageGimmicksAndWeather(b,dt){
     }
    }
   }
-  // 上昇気流（空）
   for(const up of g.updrafts||[]){
    for(const f of fighters){
     if(Math.abs(f.x-up.x)<up.w*0.5){
@@ -1180,7 +1163,6 @@ function stepStageGimmicksAndWeather(b,dt){
     if(Math.abs(q.x-up.x)<up.w*0.5)q.vy-=520*dt;
    }
   }
-  // 溶岩間欠泉（火山）
   for(const gy of g.geysers||[]){
    gy.t-=dt;
    if(gy.state==='idle'&&gy.t<=0){gy.state='warn';gy.t=1.15;}
@@ -1197,7 +1179,6 @@ function stepStageGimmicksAndWeather(b,dt){
     if(gy.t<=0){gy.state='idle';gy.t=3.6+Math.random()*1.8;}
    }
   }
-  // つららトラップ（氷）
   for(const ic of g.icicles||[]){
    ic.t-=dt;
    if(ic.state==='wait'&&ic.t<=0){
@@ -1225,7 +1206,6 @@ function stepStageGimmicksAndWeather(b,dt){
     }
    }
   }
-  // 反重力バンパー（宇宙）
   if(g.bumper){
    const bm=g.bumper;
    bm.pulse=Math.max(0,(bm.pulse||0)-dt*2);
@@ -1243,7 +1223,6 @@ function stepStageGimmicksAndWeather(b,dt){
     }
    }
   }
-  // 流砂（砂漠）
   if(g.quicksand){
    const qs=g.quicksand;
    for(const f of fighters){
@@ -1255,7 +1234,6 @@ function stepStageGimmicksAndWeather(b,dt){
   }
  }
 
- // 4. 天気システム（時間経過ランダム変化 ＋ 天気変更オーブ ＋ 物理効果）
  const w=b.weather;
  if(w){
   w.timer=(w.timer||0)+dt;
@@ -1268,7 +1246,6 @@ function stepStageGimmicksAndWeather(b,dt){
    applyWeatherChange(b,nextW,false);
   }
 
-  // 天気変更アイテム（オーブ）の出現と取得判定（触れるか弾を当てると天気が変化）
   if(!b.weatherOrb){
    b.nextWeatherOrb=(b.nextWeatherOrb??4)-dt;
    if(b.nextWeatherOrb<=0){
@@ -1304,15 +1281,12 @@ function stepStageGimmicksAndWeather(b,dt){
    }
   }
 
-  // 天気ごとの物理効果
   if(w.type==='rain'){
-   // 豪雨：銃の弾が雨の重みと下降気流で急降下する
    for(const q of b.bullets||[]){
     q.vy=(q.vy||0)+560*dt;
     q.vx=(q.vx||0)*Math.pow(0.86,dt);
    }
   }else if(w.type==='snow'){
-   // 大雪：地面や足場が凍って摩擦が減り、キャラがツルツル滑る
    for(const f of fighters){
     const onGroundOrPlat=!!f.onPlatform||f.y>=285;
     if(onGroundOrPlat){
@@ -1326,7 +1300,6 @@ function stepStageGimmicksAndWeather(b,dt){
     }
    }
   }else if(w.type==='storm'){
-   // 嵐：強風でキャラと弾が流され、ときどき落雷
    const wind=(w.windDir||1);
    for(const f of fighters){
     f.vx+=wind*185*dt;
@@ -1352,14 +1325,12 @@ function stepStageGimmicksAndWeather(b,dt){
   if(w._boltT>0)w._boltT=Math.max(0,w._boltT-dt);
  }
 
- // 最終位置クランプ
  for(const f of fighters){
   f.x=Math.max(75,Math.min(885,f.x));
   f.y=Math.max(62,Math.min(295,f.y));
  }
 }
 
-// ワールド座標系の足場装飾・ギミック・天気オーブ描画
 let stageFxClock=0,screenRainDrops=[],screenSnowFlakes=[];
 function ensureScreenWeatherParticles(){
  if(!screenRainDrops.length){
@@ -1375,7 +1346,6 @@ function drawWorldGimmicksAndWeather(ctx,b){
  const w=b.weather||{type:'clear',freezeLevel:0};
  const g=b.gimmicks;
 
- // 1. 足場のビジュアル補強＆凍結コーティング
  for(const o of b.terrain||[]){
   if(!o||o.broken||!(o.isPlatform||o.type==='platform'))continue;
   ctx.save();
@@ -1393,7 +1363,6 @@ function drawWorldGimmicksAndWeather(ctx,b){
   ctx.restore();
  }
 
- // 2. 地面の凍結レイヤー（大雪時）
  if((w.freezeLevel||0)>0.05){
   ctx.save();
   ctx.fillStyle=`rgba(195,246,255,${0.55*w.freezeLevel})`;
@@ -1401,7 +1370,6 @@ function drawWorldGimmicksAndWeather(ctx,b){
   ctx.restore();
  }
 
- // 3. ステージ固有ギミックの描画
  if(g){
   for(const sp of g.springs||[]){
    const compressed=(sp.cool||0)>0.35;
@@ -1472,7 +1440,6 @@ function drawWorldGimmicksAndWeather(ctx,b){
   }
  }
 
- // 4. 天気変更アイテム（オーブ）の描画
  if(b.weatherOrb){
   const orb=b.weatherOrb;
   const bob=Math.sin((orb.pulse||0))*4;
@@ -1498,7 +1465,6 @@ function drawWorldGimmicksAndWeather(ctx,b){
   ctx.restore();
  }
 
- // 5. 嵐の落雷フラッシュ
  if(w._boltT>0&&Number.isFinite(w._boltX)){
   ctx.save();
   ctx.strokeStyle='rgba(255,250,180,0.95)';
@@ -1513,7 +1479,6 @@ function drawWorldGimmicksAndWeather(ctx,b){
  }
 }
 
-// スクリーン座標系の雨・雪・霧エフェクト＆天気HUDバッジ描画
 function drawScreenWeatherHud(ctx,b){
  if(!b)return;
  ensureScreenWeatherParticles();
@@ -1564,16 +1529,8 @@ function drawScreenWeatherHud(ctx,b){
    ctx.lineTo(d.x+wd*14,d.y+8);
   }
   ctx.stroke();
- }else if(w.type==='fog'){
-  const grad=ctx.createLinearGradient(0,60,0,400);
-  grad.addColorStop(0,'rgba(215,228,236,0.18)');
-  grad.addColorStop(0.55,'rgba(215,228,236,0.42)');
-  grad.addColorStop(1,'rgba(215,228,236,0.22)');
-  ctx.fillStyle=grad;
-  ctx.fillRect(0,0,960,440);
  }
 
- // 右上天気バッジ
  const badgeW=172,badgeH=32,bx=960-badgeW-14,by=12;
  ctx.fillStyle='rgba(10,26,42,0.78)';
  ctx.strokeStyle=def.accent;
@@ -1590,7 +1547,6 @@ function drawScreenWeatherHud(ctx,b){
  ctx.textBaseline='middle';
  ctx.fillText(def.icon+' 天気: '+def.name,bx+12,by+badgeH*0.5);
 
- // 天気切り替わり時のテロップ通知
  if((w.bannerTimer||0)>0&&w.bannerText){
   const alpha=Math.min(1,w.bannerTimer*2);
   ctx.globalAlpha=alpha;
@@ -1607,82 +1563,8 @@ function drawScreenWeatherHud(ctx,b){
 }
 
 // ============================================================================
-// タイトル画面・UI・オンライン対戦システム
+// オンライン対戦システム
 // ============================================================================
-function polishTitleScreen(){
- if($('arenaTitleTheme'))return;
- const st=document.createElement('style');
- st.id='arenaTitleTheme';
- st.textContent=`
-  #home h1{
-   font-size:clamp(28px,5.8vw,48px)!important;
-   font-weight:900!important;
-   letter-spacing:0.14em!important;
-   text-transform:uppercase!important;
-   margin:8px 0 4px!important;
-   color:#ffffff!important;
-   text-shadow:0 3px 0 #183a56,0 8px 20px rgba(0,0,0,0.45)!important;
-  }
-  #home > p, #home .subtitle{
-   color:#e6f4ff!important;
-   font-size:12px!important;
-   letter-spacing:0.18em!important;
-   text-transform:uppercase!important;
-   margin:0 0 12px!important;
-   font-weight:800!important;
-   text-shadow:0 2px 8px rgba(0,0,0,0.55)!important;
-  }
-  #home .menu{
-   display:grid!important;
-   grid-template-columns:repeat(auto-fit,minmax(155px,1fr))!important;
-   gap:10px!important;
-   width:min(680px,94%)!important;
-   margin:12px auto 0!important;
-   position:relative!important;
-   z-index:5!important;
-  }
-  #home .menu-item{
-   display:flex!important;
-   flex-direction:column!important;
-   align-items:center!important;
-   justify-content:center!important;
-   gap:7px!important;
-   padding:14px 10px!important;
-   border-radius:16px!important;
-   background:linear-gradient(180deg,rgba(26,58,84,0.86) 0%,rgba(14,34,52,0.92) 100%)!important;
-   backdrop-filter:blur(4px)!important;
-   border:1.5px solid rgba(175,224,255,0.42)!important;
-   color:#ffffff!important;
-   font-size:14px!important;
-   font-weight:800!important;
-   letter-spacing:0.04em!important;
-   box-shadow:0 8px 18px rgba(0,0,0,0.32)!important;
-   transition:transform .15s ease,border-color .15s ease,box-shadow .15s ease!important;
-   cursor:pointer!important;
-  }
-  #home .menu-item:hover{
-   transform:translateY(-2px)!important;
-   border-color:#8ce4ff!important;
-   box-shadow:0 11px 24px rgba(26,145,212,0.38)!important;
-  }
-  #home .menu-item:active{
-   transform:translateY(0)!important;
-  }
-  #home .menu-icon{
-   width:40px!important;
-   height:40px!important;
-   border-radius:12px!important;
-   display:grid!important;
-   place-items:center!important;
-   font-size:20px!important;
-   box-shadow:0 4px 10px rgba(0,0,0,0.28)!important;
-  }
- `;
- document.head.appendChild(st);
- const sub=$('home')?.querySelector('p');
- if(sub)sub.textContent='CUSTOM PHYSICS BATTLE ARENA';
-}
-
 document.querySelectorAll('[data-mode]').forEach(el=>{
  el.addEventListener('click',()=>{
   if(el.dataset.mode!=='tournament'){
@@ -1709,7 +1591,6 @@ go=function(nextScreen){
  }
 };
 
-// 描画フック：カメラ変換を取得して足場・ギミック・天気・HUDを重ねて描画
 const originalDrawBattle=drawBattle;
 drawBattle=function(){
  const arena=$('arena');
@@ -1756,7 +1637,6 @@ drawBattle=function(){
 };
 
 function onlineUi(){
- polishTitleScreen();
  if($('homeOnline'))return;
  const menu=document.querySelector('#home .menu');
  if(menu){
