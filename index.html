@@ -912,15 +912,29 @@ async function connectFirebaseOnline(){
   onlineStatus('接続済み。匿名認証OK：'+onlineUser.uid.slice(0,8));
  }catch(e){onlineStatus('接続エラー：'+(e.message||e)+'\nFirebase Authenticationの匿名ログインとRealtime Databaseのルールを確認してください。')}
 }
-function currentOnlineBuild(){return {items:(builds[buildIndex]||builds[0]||[]).map(x=>({...x})),color,orn,buildIndex}}
+// Firebase Realtime Database cannot store undefined values. Clean every object before writing.
+function onlineFirebaseSafe(value){
+ if(value===undefined||typeof value==='function')return undefined;
+ if(typeof value==='number')return Number.isFinite(value)?value:null;
+ if(value===null||typeof value!=='object')return value;
+ if(Array.isArray(value))return value.map(v=>v===undefined?null:onlineFirebaseSafe(v));
+ const result={};for(const key of Object.keys(value)){const v=onlineFirebaseSafe(value[key]);if(v!==undefined)result[key]=v;}return result;
+}
+function currentOnlineBuild(){
+ const source=builds[buildIndex]||builds[0]||[];
+ const items=Array.isArray(source)?source.map(x=>onlineFirebaseSafe(x||{})):[];
+ return onlineFirebaseSafe({items,color:color||'#8bd5ff',orn:orn||'star',buildIndex:Number.isFinite(buildIndex)?buildIndex:0});
+}
 function makeRoomCode(){return String(Math.floor(10000000+Math.random()*90000000))}
+let onlineHostStarting=false;
 function listenOnlineRoom(code,isHost){
  if(onlineRoomUnsub)onlineRoomUnsub();
  const ref=onlineDb.ref('rooms/'+code);
  const cb=ref.on('value',snap=>{
   const d=snap.val();if(!d)return;
-  if(isHost&&d.guestUid&&d.status==='waiting'){
-   ref.update({status:'playing',startedAt:firebase.database.ServerValue.TIMESTAMP}).then(()=>startOnlineBattle(true,d.guestBuild,d.guestColor,d.guestOrn)).catch(e=>onlineStatus('対戦開始エラー：'+e.message));
+  if(isHost&&d.guestUid&&d.status==='waiting'&&!onlineHostStarting){
+   onlineHostStarting=true;
+   ref.update({status:'playing',startedAt:firebase.database.ServerValue.TIMESTAMP}).then(()=>startOnlineBattle(true,Array.isArray(d.guestBuild)?d.guestBuild:[],d.guestColor||'#ffc1c8',d.guestOrn||'star')).catch(e=>{onlineHostStarting=false;onlineStatus('対戦開始エラー：'+e.message)});
   }
   if(!isHost&&d.status==='playing'&&d.snapshot){
    if(!onlineSession?.started){onlineSession={...onlineSession,started:true,isHost:false,code};gameMode='online';document.querySelector('#battle .hp-row b').textContent='HOST';document.querySelector('#battle .hp-row b:last-child').textContent='GUEST';$('onlineOverlay').style.display='none';go('battle');$('battlelog').textContent='オンライン対戦 ／ ルーム '+code;}
@@ -942,23 +956,32 @@ async function createOnlineRoom(){
  }catch(e){onlineStatus('ルーム作成エラー：'+e.message+'\nRealtime Databaseのセキュリティルールを確認してください。')}
 }
 async function joinOnlineRoom(){
- try{await connectFirebaseOnline();if(!onlineUser||!onlineDb)return;
-  const code=($('onlineJoinCode').value||'').replace(/\D/g,'');if(code.length!==8){onlineStatus('8桁のルームコードを入力してね。');return}
-  const ref=onlineDb.ref('rooms/'+code);let joined=false;
-  await ref.transaction(d=>{if(!d||d.status!=='waiting'||d.guestUid)return;d.guestUid=onlineUser.uid;const b=currentOnlineBuild();d.guestBuild=b.items;d.guestColor=b.color;d.guestOrn=b.orn;return d},(err,committed)=>{if(err)onlineStatus('参加エラー：'+err.message);else if(!committed)onlineStatus('参加できませんでした。コードが違うか、満員・試合開始済みです。');else{joined=true;onlineSession={code,isHost:false,status:'waiting',started:false};$('onlineCode').textContent=code;onlineStatus('ルームに参加したよ！ホストが試合を開始するまで待ってね。');listenOnlineRoom(code,false)} });
- }catch(e){onlineStatus('参加エラー：'+e.message+'\nRealtime Databaseのセキュリティルールを確認してください。')}
+ try{
+  await connectFirebaseOnline();if(!onlineUser||!onlineDb)return;
+  const code=String($('onlineJoinCode').value||'').replace(/\D/g,'');
+  if(code.length!==8){onlineStatus('8桁のルームコードを入力してね。');return}
+  const ref=onlineDb.ref('rooms/'+code),b=currentOnlineBuild();
+  const result=await ref.transaction(d=>{
+   if(!d||d.status!=='waiting'||d.guestUid||d.hostUid===onlineUser.uid)return;
+   d.guestUid=onlineUser.uid;d.guestBuild=b.items;d.guestColor=b.color;d.guestOrn=b.orn;
+   return onlineFirebaseSafe(d);
+  });
+  if(!result||!result.committed){onlineStatus('参加できませんでした。コードが違うか、満員・試合開始済みです。');return}
+  onlineSession={code,isHost:false,status:'waiting',started:false};
+  $('onlineCode').textContent=code;onlineStatus('ルームに参加したよ！ホストが試合を開始するまで待ってね。');listenOnlineRoom(code,false);
+ }catch(e){onlineStatus('参加エラー：'+e.message+'\nFirebaseのRealtime Databaseルールで、ログイン済みユーザーのrooms読み書きが許可されているか確認してください。')}
 }
 async function startOnlineMatchmaking(){
  try{await connectFirebaseOnline();if(!onlineUser||!onlineDb)return;
-  const qref=onlineDb.ref('matchQueue'),myRef=qref.child(onlineUser.uid);await myRef.set({uid:onlineUser.uid,createdAt:firebase.database.ServerValue.TIMESTAMP,build:currentOnlineBuild().items,color,orn,status:'waiting'});
+  const qref=onlineDb.ref('matchQueue'),myRef=qref.child(onlineUser.uid);const myBuild=currentOnlineBuild();await myRef.set(onlineFirebaseSafe({uid:onlineUser.uid,createdAt:firebase.database.ServerValue.TIMESTAMP,build:myBuild.items,color:myBuild.color,orn:myBuild.orn,status:'waiting'}));
   onlineStatus('対戦相手を探しています…\nマッチング中はこの画面を閉じないでね。');$('onlineCreate').disabled=$('onlineJoin').disabled=true;
   const cb=qref.on('value',async snap=>{
-   const all=snap.val()||{};const candidates=Object.values(all).filter(x=>x&&x.uid!==onlineUser.uid&&x.status==='waiting'&&!x.roomCode).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+   const all=snap.val()||{};const candidates=Object.values(all).filter(x=>x&&x.uid!==onlineUser.uid&&x.status==='waiting'&&!x.roomCode&&Array.isArray(x.build)).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
    if(!candidates.length)return;
-   const other=candidates[0];if(onlineUser.uid.localeCompare(other.uid)>0)return;
+   const other=candidates[0];if(!Array.isArray(other.build)||onlineUser.uid.localeCompare(other.uid)>0)return;
    const code=makeRoomCode(),my=currentOnlineBuild();
    try{
-    const updates={};updates['rooms/'+code]={hostUid:onlineUser.uid,guestUid:other.uid,hostBuild:my.items,hostColor:my.color,hostOrn:my.orn,guestBuild:other.build,guestColor:other.color,guestOrn:other.orn,status:'playing',createdAt:firebase.database.ServerValue.TIMESTAMP,stage:stageKey};
+    const updates={};updates['rooms/'+code]=onlineFirebaseSafe({hostUid:onlineUser.uid,guestUid:other.uid,hostBuild:my.items,hostColor:my.color,hostOrn:my.orn,guestBuild:other.build,guestColor:other.color,guestOrn:other.orn,status:'playing',createdAt:firebase.database.ServerValue.TIMESTAMP,stage:stageKey});
     updates['matchQueue/'+onlineUser.uid+'/roomCode']=code;updates['matchQueue/'+other.uid+'/roomCode']=code;updates['matchQueue/'+onlineUser.uid+'/status']='paired';updates['matchQueue/'+other.uid+'/status']='paired';
     await onlineDb.ref().update(updates);
     onlineSession={code,isHost:true,status:'playing',started:false};onlineQueueUnsub&&onlineQueueUnsub();onlineQueueUnsub=null;myRef.remove();listenOnlineRoom(code,true);startOnlineBattle(true,other.build,other.color,other.orn);
@@ -989,7 +1012,7 @@ function showOnlineResult(result){
 }
 async function leaveOnlineRoom(){
  try{if(onlineRoomUnsub){onlineRoomUnsub();onlineRoomUnsub=null}if(onlineQueueUnsub){onlineQueueUnsub();onlineQueueUnsub=null}if(onlineSession?.code&&onlineDb){const ref=onlineDb.ref('rooms/'+onlineSession.code);if(onlineSession.isHost)await ref.update({status:'closed'});else await ref.child('guestUid').remove()}if(onlineUser&&onlineDb)await onlineDb.ref('matchQueue/'+onlineUser.uid).remove()}catch(e){console.warn(e)}
- onlineSession=null;
+ onlineSession=null;onlineHostStarting=false;
 }
 // Host is authoritative: only host advances physics and publishes snapshots.
 const originalFinish=finish;
