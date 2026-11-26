@@ -891,7 +891,7 @@ const ONLINE_FIREBASE_CONFIG={
  appId:'1:86707291255:web:01e2e67fa63c3513503272'
 };
 let onlineDb=null,onlineUser=null,onlineSession=null,onlineRoomUnsub=null,onlineQueueUnsub=null,onlinePublishAt=0,onlinePublishInFlight=false;
-let onlineGuestTarget=null,onlineGuestLastFrame=0;
+let onlineGuestTarget=null,onlineGuestLastFrame=0,onlineGuestSyncAt=0,onlineLastTerrainSig='',onlineTerrainTick=0;
 
 // 画面遷移時・モード切替時にトーナメント状態が他モードへ残らないよう確実にリセット
 document.querySelectorAll('[data-mode]').forEach(el=>{
@@ -987,7 +987,7 @@ function currentOnlineBuild(){
  return onlineFirebaseSafe({items,color:color||'#8bd5ff',orn:orn||'star',buildIndex:idx});
 }
 // Firebase RTDB strips empty arrays ([]). Restore all required arrays/fields on the guest side.
-function normalizeOnlineSnapshot(raw,prevCamera){
+function normalizeOnlineSnapshot(raw,prevBattle){
  if(!raw||typeof raw!=='object')return null;
  const normFighter=(f,fx,fside,fcol)=>({
   x:Number.isFinite(f?.x)?f.x:fx,
@@ -1004,7 +1004,7 @@ function normalizeOnlineSnapshot(raw,prevCamera){
   hurtJolt:Number.isFinite(f?.hurtJolt)?f.hurtJolt:0,
   items:Array.isArray(f?.items)?f.items.filter(Boolean):[]
  });
- const baseCam=prevCamera&&typeof prevCamera==='object'?prevCamera:{};
+ const baseCam=prevBattle?.camera&&typeof prevBattle.camera==='object'?prevBattle.camera:{};
  const cam={
   x:Number.isFinite(baseCam.x)?baseCam.x:480,
   y:Number.isFinite(baseCam.y)?baseCam.y:220,
@@ -1015,14 +1015,17 @@ function normalizeOnlineSnapshot(raw,prevCamera){
   flash:Number.isFinite(raw.camera?.flash)?raw.camera.flash:0,
   finishTime:Number.isFinite(raw.camera?.finishTime)?raw.camera.finishTime:0
  };
+ const terrain=Array.isArray(raw.terrain)
+  ?raw.terrain.filter(Boolean)
+  :(Array.isArray(prevBattle?.terrain)?prevBattle.terrain:[]);
  return {
   ...raw,
-  stage:raw.stage||stageKey||'grass',
+  stage:raw.stage||prevBattle?.stage||stageKey||'grass',
   time:Number.isFinite(raw.time)?raw.time:0,
   windPhase:Number.isFinite(raw.windPhase)?raw.windPhase:0,
   a:normFighter(raw.a,160,1,'#8bd5ff'),
   b:normFighter(raw.b,800,-1,'#ffc1c8'),
-  terrain:Array.isArray(raw.terrain)?raw.terrain.filter(Boolean):[],
+  terrain,
   bullets:Array.isArray(raw.bullets)?raw.bullets.filter(Boolean):[],
   effects:Array.isArray(raw.effects)?raw.effects.filter(Boolean):[],
   hitBursts:Array.isArray(raw.hitBursts)?raw.hitBursts.filter(Boolean):[],
@@ -1034,8 +1037,9 @@ function normalizeOnlineSnapshot(raw,prevCamera){
   defeated:raw.defeated||null
  };
 }
-// ゲスト側の表示用バトル状態を最新スナップショットへ滑らかに同期（座標は60fps補間）
+// ゲスト側の表示用バトル状態を最新スナップショットへ同期
 function applyGuestSnapshot(next){
+ onlineGuestSyncAt=performance.now();
  if(!battle||!onlineSession?.started){
   battle=next;
   onlineGuestTarget=next;
@@ -1070,28 +1074,36 @@ function applyGuestSnapshot(next){
   cur.items=tgt.items;
  }
 }
-// ゲスト側で受信間隔の隙間を60fpsで滑らかに補間・予測移動する
+// ゲスト側で受信間隔の隙間を物理予測（速度＋重力）で60fps滑らかに補間
 function stepGuestInterpolation(dt){
  if(!battle||!onlineGuestTarget)return;
- const alpha=1-Math.exp(-20*dt);
+ const sinceSync=Math.min(0.26,Math.max(0,(performance.now()-onlineGuestSyncAt)/1000));
+ const grav=battle.stage==='moon'?520:720;
+ const alpha=1-Math.exp(-15*dt);
  for(const key of ['a','b']){
   const cur=battle[key],tgt=onlineGuestTarget[key];
   if(!cur||!tgt)continue;
-  const dist=Math.hypot(tgt.x-cur.x,tgt.y-cur.y);
-  if(dist>220){
-   cur.x=tgt.x;cur.y=tgt.y;
+  let predX=tgt.x+tgt.vx*sinceSync;
+  let predY=tgt.y+tgt.vy*sinceSync+0.5*grav*sinceSync*sinceSync;
+  if(predY>295)predY=295;
+  if(predY<68)predY=68;
+  predX=Math.max(75,Math.min(885,predX));
+  const dist=Math.hypot(predX-cur.x,predY-cur.y);
+  if(dist>240){
+   cur.x=predX;cur.y=predY;
   }else{
-   const predX=Math.max(75,Math.min(885,tgt.x+tgt.vx*0.04));
-   const predY=Math.max(68,Math.min(295,tgt.y+tgt.vy*0.04));
    cur.x+=(predX-cur.x)*alpha;
    cur.y+=(predY-cur.y)*alpha;
   }
   cur.hurtGlow=Math.max(0,(cur.hurtGlow||0)-dt);
   cur.hurtJolt=Math.max(0,(cur.hurtJolt||0)-dt);
  }
- for(const q of battle.bullets||[]){
-  q.x+=(q.vx||0)*dt;
-  q.y+=(q.vy||0)*dt;
+ if(battle.bullets?.length){
+  for(const q of battle.bullets){
+   q.x+=(q.vx||0)*dt;
+   q.y+=(q.vy||0)*dt;
+  }
+  battle.bullets=battle.bullets.filter(q=>q.x>=0&&q.x<=960&&q.y>=0&&q.y<=440);
  }
  for(const e of battle.effects||[]){
   e.t=Math.max(0,(e.t||0)-dt);
@@ -1110,16 +1122,31 @@ let onlineHostStarting=false;
 function listenOnlineRoom(code,isHost){
  if(onlineRoomUnsub)onlineRoomUnsub();
  const ref=onlineDb.ref('rooms/'+code);
- const cb=ref.on('value',snap=>{
-  const d=snap.val();if(!d)return;
-  if(isHost&&d.guestUid&&d.status==='waiting'&&!onlineHostStarting){
-   onlineHostStarting=true;
-   ref.update({status:'playing',startedAt:firebase.database.ServerValue.TIMESTAMP})
-    .then(()=>startOnlineBattle(true,Array.isArray(d.guestBuild)?d.guestBuild:[],d.guestColor||'#ffc1c8',d.guestOrn||'star'))
-    .catch(e=>{onlineHostStarting=false;onlineStatus('対戦開始エラー：'+e.message)});
-  }
-  if(!isHost&&d.status==='playing'&&d.snapshot){
-   const normalized=normalizeOnlineSnapshot(d.snapshot,onlineSession?.started?battle?.camera:null);
+ if(isHost){
+  // ホストは待機中のみルーム全体を監視し、試合開始後はstatusだけ監視して自分のsnapshot送信での暴発を防ぐ
+  let statusCb=null;
+  const waitCb=ref.on('value',snap=>{
+   const d=snap.val();if(!d)return;
+   if(d.guestUid&&d.status==='waiting'&&!onlineHostStarting){
+    onlineHostStarting=true;
+    ref.off('value',waitCb);
+    statusCb=ref.child('status').on('value',stSnap=>{
+     if(stSnap.val()==='closed')onlineStatus('相手が退出しました。');
+    });
+    ref.update({status:'playing',startedAt:firebase.database.ServerValue.TIMESTAMP})
+     .then(()=>startOnlineBattle(true,Array.isArray(d.guestBuild)?d.guestBuild:[],d.guestColor||'#ffc1c8',d.guestOrn||'star'))
+     .catch(e=>{onlineHostStarting=false;onlineStatus('対戦開始エラー：'+e.message)});
+   }
+  },err=>onlineStatus('ルーム接続エラー：'+err.message));
+  onlineRoomUnsub=()=>{
+   ref.off('value',waitCb);
+   if(statusCb)ref.child('status').off('value',statusCb);
+  };
+ }else{
+  // ゲストはsnapshotとstatusのみを個別監視し、不要なビルドデータの再パースを防ぐ
+  const snapCb=ref.child('snapshot').on('value',snap=>{
+   const raw=snap.val();if(!raw)return;
+   const normalized=normalizeOnlineSnapshot(raw,onlineSession?.started?battle:null);
    if(!normalized)return;
    if(!onlineSession?.started){
     onlineSession={...onlineSession,started:true,isHost:false,code};
@@ -1129,6 +1156,7 @@ function listenOnlineRoom(code,isHost){
     battle=normalized;
     onlineGuestTarget=normalized;
     onlineGuestLastFrame=0;
+    onlineGuestSyncAt=performance.now();
     setOnlineBattleLabels();
     $('trainExit').style.display='none';
     $('skip').style.display='none';
@@ -1139,15 +1167,21 @@ function listenOnlineRoom(code,isHost){
    }else{
     applyGuestSnapshot(normalized);
    }
-  }
-  if(!isHost&&d.status==='finished'&&d.result){
-   const normalized=normalizeOnlineSnapshot(d.snapshot,battle?.camera);
-   if(normalized)battle=normalized;
-   onlineStatus('試合終了');showOnlineResult(d.result);
-  }
-  if(d.status==='closed'){onlineStatus('相手が退出しました。');}
- },err=>onlineStatus('ルーム接続エラー：'+err.message));
- onlineRoomUnsub=()=>ref.off('value',cb);
+  },err=>onlineStatus('ルーム接続エラー：'+err.message));
+  const statusCb=ref.child('status').on('value',async stSnap=>{
+   const st=stSnap.val();
+   if(st==='finished'){
+    const res=(await ref.child('result').get()).val();
+    if(res){onlineStatus('試合終了');showOnlineResult(res);}
+   }else if(st==='closed'){
+    onlineStatus('相手が退出しました。');
+   }
+  });
+  onlineRoomUnsub=()=>{
+   ref.child('snapshot').off('value',snapCb);
+   ref.child('status').off('value',statusCb);
+  };
+ }
 }
 async function createOnlineRoom(){
  setOnlineBusy(true);
@@ -1272,36 +1306,41 @@ function startOnlineBattle(isHost,enemyItems,enemyColor='#ffc1c8',enemyOrn='star
   for(const f of [battle.a,battle.b]){f.stats={damage:0,hits:0,clashes:0,stuns:0,broken:0};f.stun=0;f.stunMeter=0;f.clashCool=0}
   battle.a.hp=battle.a.maxHp=100;battle.b.hp=battle.b.maxHp=100;
   $('battlelog').textContent='オンライン対戦 ／ ルーム '+onlineSession.code;setOnlineBattleLabels();$('trainExit').style.display='none';$('skip').style.display='none';
-  onlineSession.started=true;onlineSession.isHost=true;onlinePublishInFlight=false;$('onlineOverlay').style.display='none';go('battle');last=0;raf=requestAnimationFrame(frame);
+  onlineSession.started=true;onlineSession.isHost=true;onlinePublishInFlight=false;onlineLastTerrainSig='';onlineTerrainTick=0;$('onlineOverlay').style.display='none';go('battle');last=0;raf=requestAnimationFrame(frame);
 }
-function buildCompactSnapshot(b){
+function buildCompactSnapshot(b,forceTerrain=false){
  const slimFighter=f=>({
   x:Math.round(f.x*10)/10,y:Math.round(f.y*10)/10,vx:Math.round(f.vx),vy:Math.round(f.vy),
   hp:Math.round(f.hp*10)/10,maxHp:f.maxHp||100,side:f.side,color:f.color,orn:f.orn,
   stun:f.stun||0,hurtGlow:f.hurtGlow||0,hurtJolt:f.hurtJolt||0,
   items:(f.items||[]).map(it=>({id:it.id,type:it.type,parent:it.parent,x:it.x,y:it.y,angle:it.angle,hp:Math.round(it.hp*10)/10,maxHp:it.maxHp}))
  });
- return onlineFirebaseSafe({
+ const terrainList=(b.terrain||[]).map(o=>({x:o.x,y:Math.round(o.y*10)/10,w:o.w,h:o.h,hp:Math.round(o.hp*10)/10,maxHp:o.maxHp,type:o.type,broken:!!o.broken}));
+ const sig=terrainList.map(o=>`${o.x}:${o.y}:${o.hp}:${o.broken?1:0}`).join('|');
+ const sendTerrain=forceTerrain||sig!==onlineLastTerrainSig||(onlineTerrainTick++%12===0);
+ if(sendTerrain)onlineLastTerrainSig=sig;
+ const out={
   stage:b.stage,time:Math.round(b.time*10)/10,windPhase:b.windPhase||0,
   a:slimFighter(b.a),b:slimFighter(b.b),
-  terrain:(b.terrain||[]).map(o=>({x:o.x,y:Math.round(o.y*10)/10,w:o.w,h:o.h,hp:Math.round(o.hp*10)/10,maxHp:o.maxHp,type:o.type,broken:!!o.broken})),
   bullets:(b.bullets||[]).map(q=>({x:Math.round(q.x),y:Math.round(q.y),vx:Math.round(q.vx),vy:Math.round(q.vy)})),
-  effects:(b.effects||[]).slice(-10).map(e=>({x:Math.round(e.x),y:Math.round(e.y),text:e.text,t:Math.round(e.t*100)/100})),
-  hitBursts:(b.hitBursts||[]).slice(-6).map(h=>({x:Math.round(h.x),y:Math.round(h.y),t:h.t,max:h.max,r:h.r})),
+  effects:(b.effects||[]).slice(-8).map(e=>({x:Math.round(e.x),y:Math.round(e.y),text:e.text,t:Math.round(e.t*100)/100})),
+  hitBursts:(b.hitBursts||[]).slice(-5).map(h=>({x:Math.round(h.x),y:Math.round(h.y),t:h.t,max:h.max,r:h.r})),
   powerup:b.powerup?{kind:b.powerup.kind,x:Math.round(b.powerup.x),y:Math.round(b.powerup.y)}:null,
   warning:b.warning?{type:b.warning.type,t:b.warning.t}:null,
   camera:{shake:b.camera?.shake||0,flash:b.camera?.flash||0,finishTime:b.camera?.finishTime||0},
   finished:!!b.finished,
   defeated:b.defeated?{x:Math.round(b.defeated.x),y:Math.round(b.defeated.y)}:null
- });
+ };
+ if(sendTerrain)out.terrain=terrainList;
+ return onlineFirebaseSafe(out);
 }
 function publishOnlineSnapshot(){
  if(!onlineSession?.isHost||!battle||!onlineDb||onlinePublishInFlight)return;
- const now=performance.now();if(now-onlinePublishAt<100)return;onlinePublishAt=now;
+ const now=performance.now();if(now-onlinePublishAt<75)return;onlinePublishAt=now;
  onlinePublishInFlight=true;
  try{
-  const snap=buildCompactSnapshot(battle);
-  onlineDb.ref('rooms/'+onlineSession.code).update({snapshot:snap,updatedAt:firebase.database.ServerValue.TIMESTAMP})
+  const snap=buildCompactSnapshot(battle,false);
+  onlineDb.ref('rooms/'+onlineSession.code+'/snapshot').set(snap)
    .catch(e=>console.warn('online publish',e))
    .finally(()=>{onlinePublishInFlight=false;});
  }catch(e){onlinePublishInFlight=false;console.warn('snapshot serialization',e)}
@@ -1330,7 +1369,7 @@ async function leaveOnlineRoom(){
 }
 // Host is authoritative: only host advances physics and publishes snapshots.
 const originalFinish=finish;
-finish=function(){if(!battle||battle.finished)return;originalFinish();if(gameMode==='online'){$('nextRound').style.display='none';$('rematchBtn').style.display='none';$('replayBtn').style.display='none';if($('tournamentPanel'))$('tournamentPanel').style.display='none';}if(onlineSession?.isHost&&onlineDb&&battle){const winner=battle.a.hp===battle.b.hp?-1:(battle.a.hp>battle.b.hp?0:1);const result={winner,label:winner===0?'HOST WIN':winner===1?'GUEST WIN':'DRAW'};const snap=buildCompactSnapshot(battle);onlineDb.ref('rooms/'+onlineSession.code).update({status:'finished',result,snapshot:snap,finishedAt:firebase.database.ServerValue.TIMESTAMP}).catch(e=>console.warn(e));if(onlineRoomUnsub){onlineRoomUnsub();onlineRoomUnsub=null}onlineSession=null;onlineHostStarting=false;}}
+finish=function(){if(!battle||battle.finished)return;originalFinish();if(gameMode==='online'){$('nextRound').style.display='none';$('rematchBtn').style.display='none';$('replayBtn').style.display='none';if($('tournamentPanel'))$('tournamentPanel').style.display='none';}if(onlineSession?.isHost&&onlineDb&&battle){const winner=battle.a.hp===battle.b.hp?-1:(battle.a.hp>battle.b.hp?0:1);const result={winner,label:winner===0?'HOST WIN':winner===1?'GUEST WIN':'DRAW'};const snap=buildCompactSnapshot(battle,true);onlineDb.ref('rooms/'+onlineSession.code).update({status:'finished',result,snapshot:snap,finishedAt:firebase.database.ServerValue.TIMESTAMP}).catch(e=>console.warn(e));if(onlineRoomUnsub){onlineRoomUnsub();onlineRoomUnsub=null}onlineSession=null;onlineHostStarting=false;}}
 // Guest renders the host's snapshots smoothly at 60fps and never simulates independently.
 const originalFrame=frame;
 frame=function(t){
