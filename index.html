@@ -892,6 +892,91 @@ const ONLINE_FIREBASE_CONFIG={
 };
 let onlineDb=null,onlineUser=null,onlineSession=null,onlineRoomUnsub=null,onlineQueueUnsub=null,onlinePublishAt=0,onlinePublishInFlight=false;
 let onlineGuestTarget=null,onlineGuestLastFrame=0,onlineGuestSyncAt=0,onlineLastTerrainSig='',onlineTerrainTick=0;
+let onlineFxSeq=0,onlineSeenFx=new Set(),onlineMatchTimer=null,onlineMatchCountdown=null;
+
+// タイトル画面のレイアウト・スタイル・文言をスタイリッシュに刷新
+function polishTitleScreen(){
+ if(\$('arenaTitleTheme'))return;
+ const st=document.createElement('style');
+ st.id='arenaTitleTheme';
+ st.textContent=`
+  #home{
+   background:radial-gradient(circle at 50% 18%,#1f4668 0%,#0f2538 52%,#081420 100%)!important;
+   color:#f2f7fc!important;
+   padding:24px 16px 32px!important;
+   box-sizing:border-box!important;
+  }
+  #home h1{
+   font-size:clamp(30px,6vw,50px)!important;
+   font-weight:900!important;
+   letter-spacing:0.14em!important;
+   text-transform:uppercase!important;
+   margin:6px 0 6px!important;
+   background:linear-gradient(180deg,#ffffff 0%,#bfe6ff 55%,#74b9e8 100%)!important;
+   -webkit-background-clip:text!important;
+   -webkit-text-fill-color:transparent!important;
+   filter:drop-shadow(0 4px 14px rgba(0,0,0,0.55))!important;
+  }
+  #home > p, #home .subtitle{
+   color:#9ec3dc!important;
+   font-size:13px!important;
+   letter-spacing:0.18em!important;
+   text-transform:uppercase!important;
+   margin:0 0 16px!important;
+   font-weight:700!important;
+  }
+  #home canvas{
+   border-radius:18px!important;
+   border:2px solid rgba(145,205,245,0.28)!important;
+   box-shadow:0 16px 40px rgba(0,0,0,0.45),inset 0 0 0 1px rgba(255,255,255,0.08)!important;
+   max-width:min(540px,100%)!important;
+  }
+  #home .menu{
+   display:grid!important;
+   grid-template-columns:repeat(auto-fit,minmax(160px,1fr))!important;
+   gap:12px!important;
+   width:min(680px,100%)!important;
+   margin:18px auto 0!important;
+  }
+  #home .menu-item{
+   display:flex!important;
+   flex-direction:column!important;
+   align-items:center!important;
+   justify-content:center!important;
+   gap:8px!important;
+   padding:16px 12px!important;
+   border-radius:16px!important;
+   background:linear-gradient(180deg,rgba(36,74,104,0.88) 0%,rgba(20,45,67,0.94) 100%)!important;
+   border:1.5px solid rgba(154,212,248,0.3)!important;
+   color:#f4f9fd!important;
+   font-size:15px!important;
+   font-weight:800!important;
+   letter-spacing:0.04em!important;
+   box-shadow:0 8px 20px rgba(0,0,0,0.3)!important;
+   transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease!important;
+  }
+  #home .menu-item:hover{
+   transform:translateY(-3px)!important;
+   border-color:#7ce0ff!important;
+   box-shadow:0 12px 26px rgba(26,145,212,0.35)!important;
+  }
+  #home .menu-item:active{
+   transform:translateY(0)!important;
+  }
+  #home .menu-icon{
+   width:42px!important;
+   height:42px!important;
+   border-radius:12px!important;
+   display:grid!important;
+   place-items:center!important;
+   font-size:21px!important;
+   box-shadow:0 4px 10px rgba(0,0,0,0.28)!important;
+  }
+ `;
+ document.head.appendChild(st);
+ const sub=\$('home')?.querySelector('p');
+ if(sub)sub.textContent='CUSTOM PHYSICS BATTLE ARENA';
+}
 
 // 画面遷移時・モード切替時にトーナメント状態が他モードへ残らないよう確実にリセット
 document.querySelectorAll('[data-mode]').forEach(el=>{
@@ -917,15 +1002,14 @@ go=function(nextScreen){
  if(nextScreen==='battle'){
   try{window.scrollTo(0,0);}catch(e){}
  }
- if(nextScreen==='result'&&gameMode!=='tournament'&&$('tournamentPanel')){
-  $('tournamentPanel').style.display='none';
+ if(nextScreen==='result'&&gameMode!=='tournament'&&$('tournamentPanel')){$('tournamentPanel').style.display='none';
  }
 };
 
 // キャンバスのサイズ・変換行列ずれやカメラNaNによる左上固定を防止
 const originalDrawBattle=drawBattle;
 drawBattle=function(){
- const arena=$('arena');
+ const arena=\$('arena');
  if(arena){
   if(arena.width!==960)arena.width=960;
   if(arena.height!==440)arena.height=440;
@@ -947,21 +1031,123 @@ drawBattle=function(){
 };
 
 function onlineUi(){
- if($('homeOnline'))return;
+ polishTitleScreen();
+ if(\$('homeOnline'))return;
  const menu=document.querySelector('#home .menu');
- if(menu){const b=document.createElement('button');b.className='menu-item';b.id='homeOnline';b.innerHTML='<div class="menu-icon blue">🌐</div>オンライン対戦';b.onclick=()=>openOnlinePanel();menu.appendChild(b)}
- const style=document.createElement('style');style.textContent=`#onlineOverlay{position:fixed;inset:0;z-index:9999;background:#071827dd;display:none;align-items:center;justify-content:center;padding:18px}#onlineCard{width:min(560px,100%);background:#f8fbff;color:#183246;border:3px solid #244a62;border-radius:18px;padding:22px;box-shadow:0 18px 55px #0008}#onlineCard h2{margin:0 0 8px;font-size:24px}#onlineCard p{line-height:1.65}#onlineCard input{width:100%;box-sizing:border-box;padding:13px;border:2px solid #9ab2c1;border-radius:9px;font-size:18px;margin:8px 0}#onlineCard button{padding:12px 15px;border:0;border-radius:9px;background:#244f6c;color:white;font-weight:800;margin:5px;cursor:pointer}#onlineCard button:disabled{opacity:.55;cursor:not-allowed}#onlineCard button.secondary{background:#687d89}#onlineStatus{padding:12px;background:#e8f1f7;border-radius:9px;min-height:24px;margin:12px 0;white-space:pre-wrap}#onlineCode{font-size:30px;letter-spacing:5px;font-weight:900;text-align:center;color:#173c57}#onlineActions{display:flex;flex-wrap:wrap;justify-content:center}`;document.head.appendChild(style);
- const ov=document.createElement('div');ov.id='onlineOverlay';ov.innerHTML=`<div id="onlineCard"><h2>ONLINE ARENA</h2><p>友達とはルームコードで、知らない相手とはランダムマッチングで対戦できます。</p><div id="onlineStatus">Firebaseに接続しています…</div><div id="onlineCode"></div><div id="onlineActions"><button id="onlineCreate">ルームを作成</button><button id="onlineRandom">ランダムマッチング</button></div><input id="onlineJoinCode" maxlength="8" inputmode="numeric" placeholder="友達のルームコード（8桁）"><div id="onlineActions"><button id="onlineJoin">コードで参加</button><button id="onlineCancel" class="secondary">閉じる</button></div></div>`;document.body.appendChild(ov);
- $('onlineCancel').onclick=closeOnlinePanel;$('onlineCreate').onclick=createOnlineRoom;$('onlineJoin').onclick=joinOnlineRoom;$('onlineRandom').onclick=startOnlineMatchmaking;
+ if(menu){
+  const b=document.createElement('button');
+  b.className='menu-item';
+  b.id='homeOnline';
+  b.innerHTML='<div class="menu-icon blue">🌐</div>オンライン対戦';
+  b.onclick=()=>openOnlinePanel();
+  menu.appendChild(b);
+ }
+ const style=document.createElement('style');
+ style.textContent=`
+  #onlineOverlay{position:fixed;inset:0;z-index:9999;background:rgba(6,18,30,0.88);backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;padding:18px}
+  #onlineCard{width:min(520px,100%);background:linear-gradient(180deg,#16324a 0%,#0f2336 100%);color:#f2f8fc;border:1.5px solid rgba(135,204,248,0.35);border-radius:20px;padding:24px;box-shadow:0 24px 60px rgba(0,0,0,0.6)}
+  #onlineCard h2{margin:0 0 6px;font-size:24px;letter-spacing:0.08em;text-align:center;color:#ffffff}
+  #onlineCard .online-sub{margin:0 0 14px;text-align:center;font-size:13px;color:#9cc2dc}
+  #onlineStatus{padding:11px 14px;background:rgba(8,21,34,0.65);border:1px solid rgba(135,204,248,0.2);border-radius:10px;min-height:22px;margin:10px 0 14px;font-size:14px;line-height:1.55;white-space:pre-wrap;color:#d8ecfa;text-align:center}
+  .online-choice-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0}
+  .online-choice-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:20px 12px;border-radius:14px;border:1.5px solid rgba(145,212,255,0.35);background:linear-gradient(180deg,#235175 0%,#183954 100%);color:#fff;font-weight:800;font-size:16px;cursor:pointer;transition:transform .15s,border-color .15s}
+  .online-choice-btn:hover:not(:disabled){transform:translateY(-2px);border-color:#7ce0ff}
+  .online-choice-btn small{font-size:11px;font-weight:600;color:#aad2ec}
+  .online-choice-icon{font-size:28px}
+  #onlineCard input{width:100%;box-sizing:border-box;padding:13px;border:1.5px solid rgba(145,212,255,0.35);background:rgba(8,21,34,0.75);color:#fff;border-radius:10px;font-size:20px;letter-spacing:4px;text-align:center;margin:8px 0}
+  #onlineCard button.act{width:100%;padding:13px 16px;border:0;border-radius:10px;background:linear-gradient(180deg,#2d7cb0 0%,#205b84 100%);color:white;font-weight:800;font-size:15px;margin:6px 0;cursor:pointer}
+  #onlineCard button.secondary{background:rgba(255,255,255,0.12);color:#d7e8f5}
+  #onlineCard button:disabled{opacity:.5;cursor:not-allowed}
+  #onlineCode{font-size:32px;letter-spacing:6px;font-weight:900;text-align:center;color:#7ce0ff;margin:8px 0}
+  .online-divider{border-top:1px solid rgba(145,212,255,0.2);margin:14px 0;padding-top:12px}
+ `;
+ document.head.appendChild(style);
+ const ov=document.createElement('div');
+ ov.id='onlineOverlay';
+ ov.innerHTML=`
+  <div id="onlineCard">
+   <h2>ONLINE ARENA</h2>
+   <p class="online-sub">対戦モードを選択してください</p>
+   <div id="onlineStatus">サーバーに接続しています…</div>
+
+   <!-- ステップ1：2択画面 -->
+   <div id="onlineStepSelect">
+    <div class="online-choice-grid">
+     <button class="online-choice-btn" id="onlineGoRoom">
+      <span class="online-choice-icon">🏠</span>
+      <span>部屋の作成</span>
+      <small>コード発行・フレンド対戦</small>
+     </button>
+     <button class="online-choice-btn" id="onlineGoMatch">
+      <span class="online-choice-icon">⚡</span>
+      <span>オンラインマッチ</span>
+      <small>自動で対戦相手を検索</small>
+     </button>
+    </div>
+    <button id="onlineCancel" class="act secondary">タイトルへ戻る</button>
+   </div>
+
+   <!-- ステップ2：部屋の作成 / 参加画面 -->
+   <div id="onlineStepRoom" style="display:none">
+    <button id="onlineCreate" class="act">新しいルームコードを発行</button>
+    <div id="onlineCode"></div>
+    <div class="online-divider">
+     <input id="onlineJoinCode" maxlength="8" inputmode="numeric" placeholder="8桁のルームコードを入力">
+     <button id="onlineJoin" class="act">コードで参加する</button>
+    </div>
+    <button id="onlineBackFromRoom" class="act secondary">← モード選択へ戻る</button>
+   </div>
+
+   <!-- ステップ3：オンラインマッチ検索中画面 -->
+   <div id="onlineStepMatch" style="display:none">
+    <button id="onlineCancelMatch" class="act secondary">マッチングを中止して戻る</button>
+   </div>
+  </div>
+ `;
+ document.body.appendChild(ov);
+
+ \$('onlineGoRoom').onclick=()=>{
+  setOnlineStep('room');
+  onlineStatus('ルームを作成するか、友達のコードを入力してください。');
+ };
+ $('onlineGoMatch').onclick=()=>{ setOnlineStep('match'); startOnlineMatchmaking(); };$('onlineBackFromRoom').onclick=async()=>{
+  await leaveOnlineRoom();
+  setOnlineStep('select');
+  onlineStatus('対戦モードを選択してください。');
+ };
+ \$('onlineCancelMatch').onclick=async()=>{
+  await leaveOnlineRoom();
+  setOnlineStep('select');
+  onlineStatus('対戦モードを選択してください。');
+ };
+ \$('onlineCancel').onclick=closeOnlinePanel;
+ \$('onlineCreate').onclick=createOnlineRoom;
+ \$('onlineJoin').onclick=joinOnlineRoom;
+}
+function setOnlineStep(step){
+ if($('onlineStepSelect'))$('onlineStepSelect').style.display=step==='select'?'block':'none';
+ if($('onlineStepRoom'))$('onlineStepRoom').style.display=step==='room'?'block':'none';
+ if($('onlineStepMatch'))$('onlineStepMatch').style.display=step==='match'?'block':'none';
+ if(step!=='room'&&$('onlineCode'))$('onlineCode').textContent='';
 }
 function onlineStatus(t){if($('onlineStatus'))$('onlineStatus').textContent=t}
 function setOnlineBusy(busy){
- if($('onlineCreate'))$('onlineCreate').disabled=busy;
- if($('onlineJoin'))$('onlineJoin').disabled=busy;
- if($('onlineRandom'))$('onlineRandom').disabled=busy;
+ for(const id of ['onlineGoRoom','onlineGoMatch','onlineCreate','onlineJoin']){
+  if($(id))$(id).disabled=busy;
+ }
 }
-function openOnlinePanel(){onlineUi();setOnlineBusy(false);$('onlineOverlay').style.display='flex';connectFirebaseOnline()}
-function closeOnlinePanel(){if(onlineSession||onlineQueueUnsub)leaveOnlineRoom();setOnlineBusy(false);$('onlineOverlay').style.display='none'}
+function openOnlinePanel(){
+ onlineUi();
+ setOnlineBusy(false);
+ setOnlineStep('select');
+ \$('onlineOverlay').style.display='flex';
+ connectFirebaseOnline();
+}
+function closeOnlinePanel(){
+ if(onlineSession||onlineQueueUnsub||onlineMatchTimer)leaveOnlineRoom();
+ setOnlineBusy(false);
+ \$('onlineOverlay').style.display='none';
+}
 async function connectFirebaseOnline(){
  try{
   if(!window.firebase)throw new Error('Firebase SDKを読み込めません。インターネット接続を確認してください。');
@@ -969,10 +1155,9 @@ async function connectFirebaseOnline(){
   onlineDb=firebase.database();
   if(!firebase.auth().currentUser)await firebase.auth().signInAnonymously();
   onlineUser=firebase.auth().currentUser;
-  onlineStatus('接続済み。匿名認証OK：'+onlineUser.uid.slice(0,8));
- }catch(e){onlineStatus('接続エラー：'+(e.message||e)+'\nFirebase Authenticationの匿名ログインとRealtime Databaseのルールを確認してください。')}
+  onlineStatus('オンライン準備完了（ID: '+onlineUser.uid.slice(0,6)+'）');
+ }catch(e){onlineStatus('接続エラー：'+(e.message||e))}
 }
-// Firebase Realtime Database cannot store undefined or NaN/Infinity values. Clean every object before writing.
 function onlineFirebaseSafe(value){
  if(value===undefined||typeof value==='function')return undefined;
  if(typeof value==='number')return Number.isFinite(value)?value:null;
@@ -986,7 +1171,92 @@ function currentOnlineBuild(){
  const items=source.map(x=>onlineFirebaseSafe(x||{})).filter(x=>x!==undefined);
  return onlineFirebaseSafe({items,color:color||'#8bd5ff',orn:orn||'star',buildIndex:idx});
 }
-// Firebase RTDB strips empty arrays ([]). Restore all required arrays/fields on the guest side.
+
+// オンラインマッチで一定時間人が来なかった場合用の強化CPU装備を生成（レベル高め＆武器多め）
+function buildStrongOnlineCpuItems(){
+ const player=builds[buildIndex]||[];
+ const playerCount=player.length;
+ const targetCount=Math.min(7,Math.max(5,playerCount+2));
+ const pool=['blade','hammer','sword','gun','shield','blade','hammer','gun'];
+ const selected=[];
+ let usedCost=0;
+ // まず攻撃・防御の主力武器を多めに確保
+ for(let i=0;i<targetCount*2&&selected.length<targetCount;i++){
+  const pick=pool[Math.floor(Math.random()*pool.length)];
+  const c=defs[pick]?.cost||8;
+  if(usedCost+c<=50){
+   selected.push(pick);
+   usedCost+=c;
+  }
+ }
+ while(selected.length<4){
+  selected.push('sword');
+ }
+ return selected.map((type,i)=>{
+  const theta=(Math.PI*2*i/selected.length)+(Math.random()-.5)*0.18;
+  const x=Math.round(Math.cos(theta)*66);
+  const y=Math.round(Math.sin(theta)*66);
+  const angle=Math.round((theta*180/Math.PI)/5)*5;
+  return{
+   id:950+i,
+   type,
+   parent:'body',
+   x,
+   y,
+   angle,
+   hp:Math.round((defs[type]?.hp||40)*1.15),
+   maxHp:Math.round((defs[type]?.hp||40)*1.15),
+   cool:0
+  };
+ });
+}
+
+function startOnlineCpuFallback(){
+ const strongLevel=Math.max((cpuWins||0)+3,4);
+ const cpuColors=['#ff9eb5','#9be7ff','#ffd584','#d4a8ff','#98f5c4'];
+ const cpuOrns=['crown','horn','wing','star','halo'];
+ const rCol=cpuColors[Math.floor(Math.random()*cpuColors.length)];
+ const rOrn=cpuOrns[Math.floor(Math.random()*cpuOrns.length)];
+
+ gameMode='single';
+ matchWins=[0,0];
+ matchRound=0;
+ tournamentState=null;
+ if($('tournamentPanel'))$('tournamentPanel').style.display='none';
+
+ const arr=builds[buildIndex]||[];
+ battle={
+  level:strongLevel,
+  a:makeFighter(160,1,arr,color,orn),
+  b:makeFighter(800,-1,buildStrongOnlineCpuItems(),rCol,rOrn),
+  time:0,effects:[],hitBursts:[],particles:[],finished:false,
+  stage:stageKey,windFx:0,powerup:null,nextPowerup:5,powerupCount:0,bullets:[]
+ };
+ initTerrain(battle);
+ battle.record=[];
+ battle.lastCapture=-1;
+ for(const f of [battle.a,battle.b]){
+  f.stats={damage:0,hits:0,clashes:0,stuns:0,broken:0};
+  f.stun=0;f.stunMeter=0;f.clashCool=0;
+ }
+ for(const it of battle.a.items){
+  const lv=upgrades[it.type]||0;
+  it.hp+=lv*5;it.maxHp+=lv*5;
+ }
+ battle.b.hp=100+Math.min(160,strongLevel*6);
+ battle.b.maxHp=battle.b.hp;
+
+ const labels=document.querySelectorAll('#battle .hp-row b');
+ if(labels.length>=2){labels[0].textContent='YOU';labels[labels.length-1].textContent='RIVAL';}
+ \$('battlelog').textContent='オンラインマッチ ／ ライバル Lv.'+(strongLevel+1);
+ \$('trainExit').style.display='none';
+ $('skip').style.display='inline-block';$('onlineOverlay').style.display='none';
+ go('battle');
+ last=0;
+ raf=requestAnimationFrame(frame);
+}
+
+// ゲスト側：スナップショット受信と60fps滑らかエフェクト・移動補間
 function normalizeOnlineSnapshot(raw,prevBattle){
  if(!raw||typeof raw!=='object')return null;
  const normFighter=(f,fx,fside,fcol)=>({
@@ -1009,8 +1279,7 @@ function normalizeOnlineSnapshot(raw,prevBattle){
   x:Number.isFinite(baseCam.x)?baseCam.x:480,
   y:Number.isFinite(baseCam.y)?baseCam.y:220,
   scale:Number.isFinite(baseCam.scale)&&baseCam.scale>0?baseCam.scale:1.25,
-  zoom:0,
-  slow:0,
+  zoom:0,slow:0,
   shake:Number.isFinite(raw.camera?.shake)?raw.camera.shake:0,
   flash:Number.isFinite(raw.camera?.flash)?raw.camera.flash:0,
   finishTime:Number.isFinite(raw.camera?.finishTime)?raw.camera.finishTime:0
@@ -1029,7 +1298,7 @@ function normalizeOnlineSnapshot(raw,prevBattle){
   bullets:Array.isArray(raw.bullets)?raw.bullets.filter(Boolean):[],
   effects:Array.isArray(raw.effects)?raw.effects.filter(Boolean):[],
   hitBursts:Array.isArray(raw.hitBursts)?raw.hitBursts.filter(Boolean):[],
-  particles:Array.isArray(raw.particles)?raw.particles.filter(Boolean):[],
+  particles:Array.isArray(prevBattle?.particles)?prevBattle.particles:[],
   powerup:raw.powerup&&typeof raw.powerup==='object'?raw.powerup:null,
   warning:raw.warning&&typeof raw.warning==='object'?raw.warning:null,
   camera:cam,
@@ -1037,12 +1306,21 @@ function normalizeOnlineSnapshot(raw,prevBattle){
   defeated:raw.defeated||null
  };
 }
-// ゲスト側の表示用バトル状態を最新スナップショットへ同期
+function rememberFxId(id){
+ onlineSeenFx.add(id);
+ if(onlineSeenFx.size>160){
+  const first=onlineSeenFx.values().next().value;
+  onlineSeenFx.delete(first);
+ }
+}
 function applyGuestSnapshot(next){
  onlineGuestSyncAt=performance.now();
  if(!battle||!onlineSession?.started){
   battle=next;
   onlineGuestTarget=next;
+  onlineSeenFx.clear();
+  for(const e of next.effects)if(e._eid)rememberFxId(e._eid);
+  for(const h of next.hitBursts)if(h._hid)rememberFxId(h._hid);
   return;
  }
  onlineGuestTarget=next;
@@ -1051,12 +1329,31 @@ function applyGuestSnapshot(next){
  battle.windPhase=next.windPhase;
  battle.terrain=next.terrain;
  battle.bullets=next.bullets.map(q=>({...q}));
- battle.effects=next.effects;
- battle.hitBursts=next.hitBursts;
  battle.powerup=next.powerup;
  battle.warning=next.warning;
  battle.finished=next.finished;
  battle.defeated=next.defeated;
+
+ // エフェクトは上書きせず、新規発生分だけをゲストの60fpsキューに追加して滑らかに再生する
+ for(const e of next.effects){
+  const key=e._eid?('e_'+e._eid):('e_'+e.text+'_'+Math.round(e.x)+'_'+Math.round(next.time*10));
+  if(!onlineSeenFx.has(key)){
+   rememberFxId(key);
+   battle.effects.push({x:e.x,y:e.y,text:e.text,t:0.8});
+  }
+ }
+ for(const h of next.hitBursts){
+  const key=h._hid?('h_'+h._hid):('h_'+Math.round(h.x)+'_'+Math.round(h.y)+'_'+Math.round(next.time*10));
+  if(!onlineSeenFx.has(key)){
+   rememberFxId(key);
+   battle.hitBursts.push({x:h.x,y:h.y,t:h.max||0.28,max:h.max||0.28,r:h.r||20});
+   for(let j=0;j<6;j++){
+    const ang=Math.PI*2*j/6+Math.random()*0.5,sp=90+Math.random()*130;
+    battle.particles.push({x:h.x,y:h.y,vx:Math.cos(ang)*sp,vy:Math.sin(ang)*sp-40,t:0.42,color:j%2?'#ffe68a':'#ffffff'});
+   }
+  }
+ }
+
  if(next.camera){
   battle.camera.shake=Math.max(battle.camera.shake||0,next.camera.shake||0);
   battle.camera.flash=Math.max(battle.camera.flash||0,next.camera.flash||0);
@@ -1074,10 +1371,9 @@ function applyGuestSnapshot(next){
   cur.items=tgt.items;
  }
 }
-// ゲスト側で受信間隔の隙間を物理予測（速度＋重力）で60fps滑らかに補間
 function stepGuestInterpolation(dt){
  if(!battle||!onlineGuestTarget)return;
- const sinceSync=Math.min(0.26,Math.max(0,(performance.now()-onlineGuestSyncAt)/1000));
+ const sinceSync=Math.min(0.24,Math.max(0,(performance.now()-onlineGuestSyncAt)/1000));
  const grav=battle.stage==='moon'?520:720;
  const alpha=1-Math.exp(-15*dt);
  for(const key of ['a','b']){
@@ -1105,17 +1401,32 @@ function stepGuestInterpolation(dt){
   }
   battle.bullets=battle.bullets.filter(q=>q.x>=0&&q.x<=960&&q.y>=0&&q.y<=440);
  }
- for(const e of battle.effects||[]){
-  e.t=Math.max(0,(e.t||0)-dt);
+ // ダメージ表記・ヒットリング・火花パーティクルをゲスト側で60fps連続更新
+ if(battle.effects?.length){
+  for(const e of battle.effects)e.t-=dt;
+  battle.effects=battle.effects.filter(e=>e.t>0);
+ }
+ if(battle.hitBursts?.length){
+  for(const h of battle.hitBursts)h.t-=dt;
+  battle.hitBursts=battle.hitBursts.filter(h=>h.t>0);
+ }
+ if(battle.particles?.length){
+  for(const p of battle.particles){
+   p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=420*dt;p.t-=dt;
+  }
+  battle.particles=battle.particles.filter(p=>p.t>0);
  }
  if(battle.camera){
   battle.camera.shake=Math.max(0,(battle.camera.shake||0)-dt*22);
   battle.camera.flash=Math.max(0,(battle.camera.flash||0)-dt);
  }
 }
-function setOnlineBattleLabels(){
+function setOnlineBattleLabels(isHost){
  const labels=document.querySelectorAll('#battle .hp-row b');
- if(labels.length>=2){labels[0].textContent='HOST';labels[labels.length-1].textContent='GUEST';}
+ if(labels.length>=2){
+  labels[0].textContent=isHost?'YOU':'RIVAL';
+  labels[labels.length-1].textContent=isHost?'RIVAL':'YOU';
+ }
 }
 function makeRoomCode(){return String(Math.floor(10000000+Math.random()*90000000))}
 let onlineHostStarting=false;
@@ -1123,7 +1434,6 @@ function listenOnlineRoom(code,isHost){
  if(onlineRoomUnsub)onlineRoomUnsub();
  const ref=onlineDb.ref('rooms/'+code);
  if(isHost){
-  // ホストは待機中のみルーム全体を監視し、試合開始後はstatusだけ監視して自分のsnapshot送信での暴発を防ぐ
   let statusCb=null;
   const waitCb=ref.on('value',snap=>{
    const d=snap.val();if(!d)return;
@@ -1143,7 +1453,6 @@ function listenOnlineRoom(code,isHost){
    if(statusCb)ref.child('status').off('value',statusCb);
   };
  }else{
-  // ゲストはsnapshotとstatusのみを個別監視し、不要なビルドデータの再パースを防ぐ
   const snapCb=ref.child('snapshot').on('value',snap=>{
    const raw=snap.val();if(!raw)return;
    const normalized=normalizeOnlineSnapshot(raw,onlineSession?.started?battle:null);
@@ -1157,235 +1466,15 @@ function listenOnlineRoom(code,isHost){
     onlineGuestTarget=normalized;
     onlineGuestLastFrame=0;
     onlineGuestSyncAt=performance.now();
-    setOnlineBattleLabels();
-    $('trainExit').style.display='none';
-    $('skip').style.display='none';
-    $('onlineOverlay').style.display='none';
+    onlineSeenFx.clear();
+    setOnlineBattleLabels(false);
+    \$('trainExit').style.display='none';
+    $('skip').style.display='none';$('onlineOverlay').style.display='none';
     go('battle');
-    $('battlelog').textContent='オンライン対戦 ／ ルーム '+code;
+    \$('battlelog').textContent='オンライン対戦 ／ ルーム '+code;
     raf=requestAnimationFrame(frame);
    }else{
     applyGuestSnapshot(normalized);
    }
   },err=>onlineStatus('ルーム接続エラー：'+err.message));
-  const statusCb=ref.child('status').on('value',async stSnap=>{
-   const st=stSnap.val();
-   if(st==='finished'){
-    const res=(await ref.child('result').get()).val();
-    if(res){onlineStatus('試合終了');showOnlineResult(res);}
-   }else if(st==='closed'){
-    onlineStatus('相手が退出しました。');
-   }
-  });
-  onlineRoomUnsub=()=>{
-   ref.child('snapshot').off('value',snapCb);
-   ref.child('status').off('value',statusCb);
-  };
- }
-}
-async function createOnlineRoom(){
- setOnlineBusy(true);
- try{
-  await connectFirebaseOnline();if(!onlineUser||!onlineDb)return;
-  if(onlineSession||onlineQueueUnsub)await leaveOnlineRoom();
-  onlineHostStarting=false;
-  const code=makeRoomCode(),b=currentOnlineBuild();
-  const payload=onlineFirebaseSafe({
-   hostUid:onlineUser.uid,
-   guestUid:null,
-   hostBuild:b.items,
-   hostColor:b.color,
-   hostOrn:b.orn,
-   guestBuild:null,
-   status:'waiting',
-   createdAt:firebase.database.ServerValue.TIMESTAMP,
-   stage:stageKey||'grass'
-  });
-  await onlineDb.ref('rooms/'+code).set(payload);
-  onlineSession={code,isHost:true,status:'waiting',started:false};
-  $('onlineCode').textContent=code;
-  onlineStatus('ルームを作成したよ！この8桁のコードを友達に送ってね。相手の参加を待っています…');
-  listenOnlineRoom(code,true);
- }catch(e){
-  onlineStatus('ルーム作成エラー：'+(e.message||e)+'\nRealtime Databaseのセキュリティルールを確認してください。');
- }finally{
-  setOnlineBusy(false);
- }
-}
-async function joinOnlineRoom(){
- setOnlineBusy(true);
- try{
-  await connectFirebaseOnline();if(!onlineUser||!onlineDb)return;
-  const code=String($('onlineJoinCode').value||'').replace(/\D/g,'');
-  if(code.length!==8){onlineStatus('8桁のルームコードを入力してね。');return}
-  if(onlineSession||onlineQueueUnsub)await leaveOnlineRoom();
-
-  const ref=onlineDb.ref('rooms/'+code);
-  const preSnap=await ref.get();
-  if(!preSnap.exists()){
-   onlineStatus('ルームが見つかりません。8桁のコードが正しいか確認してね。');
-   return;
-  }
-  const current=preSnap.val()||{};
-  if(current.hostUid===onlineUser.uid){
-   onlineStatus('自分が作成したルームには参加できません。');
-   return;
-  }
-  if(current.status!=='waiting'){
-   onlineStatus('このルームはすでに対戦中か終了しています。');
-   return;
-  }
-  if(current.guestUid){
-   onlineStatus('このルームはすでに満員です。');
-   return;
-  }
-
-  const b=currentOnlineBuild();
-  let rejectReason='';
-  const result=await ref.transaction(d=>{
-   if(d===null)return null;
-   if(!d.hostUid){rejectReason='ルームデータが見つかりません。';return}
-   if(d.hostUid===onlineUser.uid){rejectReason='自分が作成したルームには参加できません。';return}
-   if(d.status!=='waiting'){rejectReason='このルームはすでに対戦中か終了しています。';return}
-   if(d.guestUid){rejectReason='このルームはすでに満員です。';return}
-   return onlineFirebaseSafe({
-    ...d,
-    guestUid:onlineUser.uid,
-    guestBuild:b.items,
-    guestColor:b.color,
-    guestOrn:b.orn,
-    joinedAt:firebase.database.ServerValue.TIMESTAMP
-   });
-  },undefined,false);
-
-  if(!result||!result.committed||!result.snapshot?.val()){
-   onlineStatus(rejectReason||'参加できませんでした。コードが違うか、満員・試合開始済みです。');
-   return;
-  }
-  if($('onlineJoinCode'))$('onlineJoinCode').blur();
-  onlineSession={code,isHost:false,status:'waiting',started:false};
-  $('onlineCode').textContent=code;
-  onlineStatus('ルームに参加したよ！ホストが試合を開始するまで待ってね。');
-  listenOnlineRoom(code,false);
- }catch(e){
-  onlineStatus('参加エラー：'+(e.message||e)+'\nFirebaseのRealtime Databaseルールで、ログイン済みユーザーのrooms読み書きが許可されているか確認してください。');
- }finally{
-  setOnlineBusy(false);
- }
-}
-async function startOnlineMatchmaking(){
- setOnlineBusy(true);
- try{await connectFirebaseOnline();if(!onlineUser||!onlineDb)return;
-  if(onlineSession||onlineQueueUnsub)await leaveOnlineRoom();
-  onlineHostStarting=false;
-  const qref=onlineDb.ref('matchQueue'),myRef=qref.child(onlineUser.uid);const myBuild=currentOnlineBuild();await myRef.set(onlineFirebaseSafe({uid:onlineUser.uid,createdAt:firebase.database.ServerValue.TIMESTAMP,build:myBuild.items,color:myBuild.color,orn:myBuild.orn,status:'waiting'}));
-  onlineStatus('対戦相手を探しています…\nマッチング中はこの画面を閉じないでね。');
-  const cb=qref.on('value',async snap=>{
-   const all=snap.val()||{};const candidates=Object.values(all).filter(x=>x&&x.uid!==onlineUser.uid&&x.status==='waiting'&&!x.roomCode&&Array.isArray(x.build)).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
-   if(!candidates.length)return;
-   const other=candidates[0];if(!Array.isArray(other.build)||onlineUser.uid.localeCompare(other.uid)>0)return;
-   const code=makeRoomCode(),my=currentOnlineBuild();
-   try{
-    const updates={};updates['rooms/'+code]=onlineFirebaseSafe({hostUid:onlineUser.uid,guestUid:other.uid,hostBuild:my.items,hostColor:my.color,hostOrn:my.orn,guestBuild:other.build,guestColor:other.color,guestOrn:other.orn,status:'playing',createdAt:firebase.database.ServerValue.TIMESTAMP,stage:stageKey||'grass'});
-    updates['matchQueue/'+onlineUser.uid+'/roomCode']=code;updates['matchQueue/'+other.uid+'/roomCode']=code;updates['matchQueue/'+onlineUser.uid+'/status']='paired';updates['matchQueue/'+other.uid+'/status']='paired';
-    await onlineDb.ref().update(updates);
-    onlineSession={code,isHost:true,status:'playing',started:false};onlineQueueUnsub&&onlineQueueUnsub();onlineQueueUnsub=null;myRef.remove();setOnlineBusy(false);listenOnlineRoom(code,true);startOnlineBattle(true,other.build,other.color,other.orn);
-   }catch(e){onlineStatus('マッチングエラー：'+e.message)}
-  });onlineQueueUnsub=()=>qref.off('value',cb);
-  const pairedCb=myRef.child('roomCode').on('value',async ss=>{const code=ss.val();if(!code||onlineSession?.code===code)return;const room=(await onlineDb.ref('rooms/'+code).get()).val();if(!room)return;onlineSession={code,isHost:false,status:'playing',started:false};onlineQueueUnsub&&onlineQueueUnsub();onlineQueueUnsub=null;myRef.remove();setOnlineBusy(false);listenOnlineRoom(code,false)});
-  const oldUnsub=onlineQueueUnsub;onlineQueueUnsub=()=>{oldUnsub&&oldUnsub();myRef.child('roomCode').off('value',pairedCb)};
- }catch(e){setOnlineBusy(false);onlineStatus('マッチングエラー：'+e.message)}
-}
-function startOnlineBattle(isHost,enemyItems,enemyColor='#ffc1c8',enemyOrn='star'){
- if(!isHost||!onlineSession)return;
-  gameMode='online';matchWins=[0,0];matchRound=0;tournamentState=null;
-  if($('tournamentPanel'))$('tournamentPanel').style.display='none';
-  const mine=currentOnlineBuild();
-  battle={level:0,a:makeFighter(160,1,mine.items,mine.color,mine.orn),b:makeFighter(800,-1,enemyItems||[],enemyColor||'#ffc1c8',enemyOrn||'star'),time:0,effects:[],hitBursts:[],particles:[],finished:false,stage:stageKey,windFx:0,powerup:null,nextPowerup:5,powerupCount:0,bullets:[]};
-  initTerrain(battle);battle.record=[];battle.lastCapture=-1;
-  for(const f of [battle.a,battle.b]){f.stats={damage:0,hits:0,clashes:0,stuns:0,broken:0};f.stun=0;f.stunMeter=0;f.clashCool=0}
-  battle.a.hp=battle.a.maxHp=100;battle.b.hp=battle.b.maxHp=100;
-  $('battlelog').textContent='オンライン対戦 ／ ルーム '+onlineSession.code;setOnlineBattleLabels();$('trainExit').style.display='none';$('skip').style.display='none';
-  onlineSession.started=true;onlineSession.isHost=true;onlinePublishInFlight=false;onlineLastTerrainSig='';onlineTerrainTick=0;$('onlineOverlay').style.display='none';go('battle');last=0;raf=requestAnimationFrame(frame);
-}
-function buildCompactSnapshot(b,forceTerrain=false){
- const slimFighter=f=>({
-  x:Math.round(f.x*10)/10,y:Math.round(f.y*10)/10,vx:Math.round(f.vx),vy:Math.round(f.vy),
-  hp:Math.round(f.hp*10)/10,maxHp:f.maxHp||100,side:f.side,color:f.color,orn:f.orn,
-  stun:f.stun||0,hurtGlow:f.hurtGlow||0,hurtJolt:f.hurtJolt||0,
-  items:(f.items||[]).map(it=>({id:it.id,type:it.type,parent:it.parent,x:it.x,y:it.y,angle:it.angle,hp:Math.round(it.hp*10)/10,maxHp:it.maxHp}))
- });
- const terrainList=(b.terrain||[]).map(o=>({x:o.x,y:Math.round(o.y*10)/10,w:o.w,h:o.h,hp:Math.round(o.hp*10)/10,maxHp:o.maxHp,type:o.type,broken:!!o.broken}));
- const sig=terrainList.map(o=>`${o.x}:${o.y}:${o.hp}:${o.broken?1:0}`).join('|');
- const sendTerrain=forceTerrain||sig!==onlineLastTerrainSig||(onlineTerrainTick++%12===0);
- if(sendTerrain)onlineLastTerrainSig=sig;
- const out={
-  stage:b.stage,time:Math.round(b.time*10)/10,windPhase:b.windPhase||0,
-  a:slimFighter(b.a),b:slimFighter(b.b),
-  bullets:(b.bullets||[]).map(q=>({x:Math.round(q.x),y:Math.round(q.y),vx:Math.round(q.vx),vy:Math.round(q.vy)})),
-  effects:(b.effects||[]).slice(-8).map(e=>({x:Math.round(e.x),y:Math.round(e.y),text:e.text,t:Math.round(e.t*100)/100})),
-  hitBursts:(b.hitBursts||[]).slice(-5).map(h=>({x:Math.round(h.x),y:Math.round(h.y),t:h.t,max:h.max,r:h.r})),
-  powerup:b.powerup?{kind:b.powerup.kind,x:Math.round(b.powerup.x),y:Math.round(b.powerup.y)}:null,
-  warning:b.warning?{type:b.warning.type,t:b.warning.t}:null,
-  camera:{shake:b.camera?.shake||0,flash:b.camera?.flash||0,finishTime:b.camera?.finishTime||0},
-  finished:!!b.finished,
-  defeated:b.defeated?{x:Math.round(b.defeated.x),y:Math.round(b.defeated.y)}:null
- };
- if(sendTerrain)out.terrain=terrainList;
- return onlineFirebaseSafe(out);
-}
-function publishOnlineSnapshot(){
- if(!onlineSession?.isHost||!battle||!onlineDb||onlinePublishInFlight)return;
- const now=performance.now();if(now-onlinePublishAt<75)return;onlinePublishAt=now;
- onlinePublishInFlight=true;
- try{
-  const snap=buildCompactSnapshot(battle,false);
-  onlineDb.ref('rooms/'+onlineSession.code+'/snapshot').set(snap)
-   .catch(e=>console.warn('online publish',e))
-   .finally(()=>{onlinePublishInFlight=false;});
- }catch(e){onlinePublishInFlight=false;console.warn('snapshot serialization',e)}
-}
-function showOnlineResult(result){
- if(screen==='result'&&$('outcome').textContent===result.label)return;
- tournamentState=null;onlineGuestTarget=null;
- if($('tournamentPanel'))$('tournamentPanel').style.display='none';
- $('outcome').textContent=result.winner===0?'HOST WIN!':result.winner===1?'GUEST WIN!':'DRAW';$('summary').textContent='オンライン対戦 ／ '+(result.winner===0?'ホストの勝利':result.winner===1?'ゲストの勝利':'引き分け');$('detailStats').textContent='対戦相手とのオンラインバトルが終了しました。';$('nextRound').style.display='none';$('rematchBtn').style.display='none';$('replayBtn').style.display='none';
- if(onlineRoomUnsub){onlineRoomUnsub();onlineRoomUnsub=null}
- onlineSession=null;onlineHostStarting=false;
- go('result');
-}
-async function leaveOnlineRoom(){
- try{
-  if(onlineRoomUnsub){onlineRoomUnsub();onlineRoomUnsub=null}
-  if(onlineQueueUnsub){onlineQueueUnsub();onlineQueueUnsub=null}
-  if(onlineSession?.code&&onlineDb){
-   const ref=onlineDb.ref('rooms/'+onlineSession.code);
-   if(onlineSession.isHost)await ref.update({status:'closed'});
-   else if(!onlineSession.started)await ref.update({guestUid:null,guestBuild:null,guestColor:null,guestOrn:null});
-  }
-  if(onlineUser&&onlineDb)await onlineDb.ref('matchQueue/'+onlineUser.uid).remove();
- }catch(e){console.warn(e)}
- onlineSession=null;onlineHostStarting=false;onlineGuestTarget=null;onlinePublishInFlight=false;setOnlineBusy(false);
-}
-// Host is authoritative: only host advances physics and publishes snapshots.
-const originalFinish=finish;
-finish=function(){if(!battle||battle.finished)return;originalFinish();if(gameMode==='online'){$('nextRound').style.display='none';$('rematchBtn').style.display='none';$('replayBtn').style.display='none';if($('tournamentPanel'))$('tournamentPanel').style.display='none';}if(onlineSession?.isHost&&onlineDb&&battle){const winner=battle.a.hp===battle.b.hp?-1:(battle.a.hp>battle.b.hp?0:1);const result={winner,label:winner===0?'HOST WIN':winner===1?'GUEST WIN':'DRAW'};const snap=buildCompactSnapshot(battle,true);onlineDb.ref('rooms/'+onlineSession.code).update({status:'finished',result,snapshot:snap,finishedAt:firebase.database.ServerValue.TIMESTAMP}).catch(e=>console.warn(e));if(onlineRoomUnsub){onlineRoomUnsub();onlineRoomUnsub=null}onlineSession=null;onlineHostStarting=false;}}
-// Guest renders the host's snapshots smoothly at 60fps and never simulates independently.
-const originalFrame=frame;
-frame=function(t){
- if(screen!=='battle'||!battle)return;
- if(onlineSession&&!onlineSession.isHost){
-  const dt=onlineGuestLastFrame?Math.min(0.05,(t-onlineGuestLastFrame)/1000):0.016;
-  onlineGuestLastFrame=t;
-  stepGuestInterpolation(dt);
-  try{drawBattle();}catch(e){console.warn('guest draw',e)}
-  raf=requestAnimationFrame(frame);
-  return;
- }
- originalFrame(t);
- if(onlineSession?.isHost)publishOnlineSnapshot();
-};
-window.addEventListener('beforeunload',()=>{if(onlineSession?.isHost&&onlineDb)onlineDb.ref('rooms/'+onlineSession.code).update({status:'closed'})});
-onlineUi();
-})();
-</script></body></html>
+  const statusCb
