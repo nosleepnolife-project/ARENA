@@ -2563,27 +2563,31 @@ onlineUi();
 </script>
 <script>
 /* ============================================================================
-   SLEEP ARENA 統合アップデート（タイトル画面ドラクエ化 ＋ メニュー画面復元版）
+   SLEEP ARENA 統合アップデート（タイトル画面ドラクエ化 ＋ フリーズ完全防止版）
    ============================================================================ */
 (()=>{
  if(window.__saUnifiedPatchApplied)return;
  window.__saUnifiedPatchApplied=true;
 
+ const getEl=id=>document.getElementById(id);
  const isMobile=()=>/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)||matchMedia('(max-width: 768px)').matches||('ontouchstart' in window&&window.innerWidth<=900);
- const allStageKeys=Object.keys(stages||{});
- const pickRandomStage=()=>allStageKeys[Math.floor(Math.random()*allStageKeys.length)]||'grass';
+ const getStageKeys=()=>typeof stages==='object'&&stages?Object.keys(stages):['grass'];
+ const pickRandomStage=()=>{
+  const keys=getStageKeys();
+  return keys[Math.floor(Math.random()*keys.length)]||'grass';
+ };
 
  let randomStageMode=false;
  let trainingStyle='balanced';
  let ghostOpponent=null;
  let dqTitleIndex=0;
+ let lastTitleMsgCache='';
 
  /* --------------------------------------------------------------------------
     スタイル定義（ドラクエ風タイトル画面・GHOST ARENA・スマホ拡大表示）
     -------------------------------------------------------------------------- */
  const patchStyle=document.createElement('style');
  patchStyle.textContent=`
-  /* 画面遷移フェード＆スライド演出 */
   .screen.on{
    opacity:1;
    animation:saSlideFade .22s ease-out;
@@ -2593,8 +2597,9 @@ onlineUi();
    to{opacity:1;transform:none}
   }
 
-  /* タイトル画面（#title）をドラクエ風にする */
-  #title.screen.on{
+  /* タイトル画面（#title）：dq-ready付与後のみドラクエ風レイアウトを適用 */
+  #title.dq-ready.on,
+  #title.screen.dq-ready.on{
    background:radial-gradient(circle at 50% 24%,#18305c 0%,#091226 60%,#04070f 100%)!important;
    display:flex!important;
    flex-direction:column;
@@ -2606,7 +2611,7 @@ onlineUi();
    position:relative;
    overflow-y:auto;
   }
-  #title > :not(.dq-title-wrap):not(.dq-stars){
+  #title.dq-ready > :not(.dq-title-wrap):not(.dq-stars){
    display:none!important;
   }
   .dq-stars{
@@ -2625,7 +2630,7 @@ onlineUi();
   }
   .dq-title-wrap{
    position:relative;
-   z-index:2;
+   z-index:5;
    width:min(540px,95vw);
    display:flex;
    flex-direction:column;
@@ -2795,11 +2800,12 @@ onlineUi();
     効果音の強化（Web Audio API・外部ファイル不要・18種類 + UI音）
     -------------------------------------------------------------------------- */
  function ensureAudio(){
-  if(!soundOn)return null;
+  if(typeof soundOn!=='undefined'&&!soundOn)return null;
   try{
-   audioCtx=audioCtx||new(window.AudioContext||window.webkitAudioContext)();
-   if(audioCtx.state==='suspended')audioCtx.resume();
-   return audioCtx;
+   window.__saAudioCtx=window.__saAudioCtx||(typeof audioCtx!=='undefined'&&audioCtx)||new(window.AudioContext||window.webkitAudioContext)();
+   if(typeof audioCtx!=='undefined')audioCtx=window.__saAudioCtx;
+   if(window.__saAudioCtx.state==='suspended')window.__saAudioCtx.resume();
+   return window.__saAudioCtx;
   }catch(e){return null;}
  }
  function tone(ctx,type,f0,f1,dur,gain=0.05,delay=0){
@@ -2831,7 +2837,7 @@ onlineUi();
   src.start(t);src.stop(t+dur+0.01);
  }
 
- sfx=function(type){
+ function playSfx(type){
   const ctx=ensureAudio();
   if(!ctx)return;
   try{
@@ -2925,7 +2931,8 @@ onlineUi();
      tone(ctx,'sine',620,880,0.07,0.03);
    }
   }catch(e){}
- };
+ }
+ try{if(typeof sfx==='function')sfx=playSfx;}catch(e){}
 
  /* --------------------------------------------------------------------------
     キャラクター見た目改善（カラー統一・全頭飾り描画・暗色時コントラスト自動調整）
@@ -2939,7 +2946,8 @@ onlineUi();
  }
 
  function drawOrnamentVector(c,dec,ink){
-  const kind=dec||orn||'moon';
+  const defaultOrn=typeof orn!=='undefined'?orn:'moon';
+  const kind=dec||defaultOrn||'moon';
   c.save();
   c.translate(4,-66);
   c.lineJoin='round';c.lineCap='round';
@@ -3008,8 +3016,10 @@ onlineUi();
   c.restore();
  }
 
- sprite=function(c,x,y,size,fill,dec){
-  const bodyCol=fill||color||'#ffffff';
+ function customSprite(c,x,y,size,fill,dec){
+  const defaultColor=typeof color!=='undefined'?color:'#ffffff';
+  const defaultOrn=typeof orn!=='undefined'?orn:'moon';
+  const bodyCol=fill||defaultColor||'#ffffff';
   const dark=isDarkHex(bodyCol);
   const ink=dark?'#f4f8ff':'#102e53';
   const faceInk=dark?'#ffffff':'#102e53';
@@ -3052,7 +3062,7 @@ onlineUi();
    c.restore();
   }
 
-  drawOrnamentVector(c,dec||orn,ink);
+  drawOrnamentVector(c,dec||defaultOrn,ink);
 
   c.fillStyle=faceInk;
   c.strokeStyle=faceInk;
@@ -3071,40 +3081,46 @@ onlineUi();
   c.stroke();
 
   c.restore();
- };
+ }
+ try{if(typeof sprite==='function')sprite=customSprite;}catch(e){}
 
  /* --------------------------------------------------------------------------
     ランダムステージ（全25種・トーナメント各戦・オンライン同期・ログ表示）
     -------------------------------------------------------------------------- */
- const origRenderStages=renderStages;
- renderStages=function(){
-  origRenderStages();
-  const grid=$('stageGrid');
-  if(!grid||$('stageRandomPick'))return;
-  const rndBtn=document.createElement('button');
-  rndBtn.id='stageRandomPick';
-  rndBtn.className='stage-pick'+(randomStageMode?' sel':'');
-  rndBtn.style.cssText='--stage-sky:#3b2d71;--stage-ground:#1b4f72';
-  rndBtn.innerHTML='<span class="stage-preview">🎲</span>ランダムステージ<small>全25ステージから毎回ランダム選択</small>';
-  rndBtn.onclick=()=>{
-   randomStageMode=true;
-   stageKey=pickRandomStage();
-   sfx('decide');
-   renderStages();
-  };
-  grid.prepend(rndBtn);
-  grid.querySelectorAll('[data-stage]').forEach(btn=>{
-   btn.classList.toggle('sel',!randomStageMode&&btn.dataset.stage===stageKey);
-   btn.addEventListener('click',()=>{randomStageMode=false;});
-  });
- };
+ try{
+  if(typeof renderStages==='function'){
+   const origRenderStages=renderStages;
+   renderStages=function(){
+    origRenderStages();
+    const grid=getEl('stageGrid');
+    if(!grid||getEl('stageRandomPick'))return;
+    const rndBtn=document.createElement('button');
+    rndBtn.id='stageRandomPick';
+    rndBtn.className='stage-pick'+(randomStageMode?' sel':'');
+    rndBtn.style.cssText='--stage-sky:#3b2d71;--stage-ground:#1b4f72';
+    rndBtn.innerHTML='<span class="stage-preview">🎲</span>ランダムステージ<small>全25ステージから毎回ランダム選択</small>';
+    rndBtn.onclick=()=>{
+     randomStageMode=true;
+     if(typeof stageKey!=='undefined')stageKey=pickRandomStage();
+     playSfx('decide');
+     renderStages();
+    };
+    grid.prepend(rndBtn);
+    grid.querySelectorAll('[data-stage]').forEach(btn=>{
+     const curSt=typeof stageKey!=='undefined'?stageKey:'';
+     btn.classList.toggle('sel',!randomStageMode&&btn.dataset.stage===curSt);
+     btn.addEventListener('click',()=>{randomStageMode=false;});
+    });
+   };
+  }
+ }catch(e){}
 
  /* --------------------------------------------------------------------------
     装備復元アイテム & 足場ステージでのスーパージャンプ出現禁止
     -------------------------------------------------------------------------- */
  function stageHasPlatforms(b){
   if(!b)return false;
-  if((stages[b.stage]?.layout||0)!==0)return true;
+  if(typeof stages==='object'&&stages&&(stages[b.stage]?.layout||0)!==0)return true;
   return (b.terrain||[]).some(o=>o&&!o.broken&&(o.type==='platform'||o.type==='bridge'||o.type==='moving'||o.isPlatform));
  }
 
@@ -3131,32 +3147,33 @@ onlineUi();
       const ang=Math.PI*2*j/14,sp=70+Math.random()*130;
       b.particles.push({x:f.x,y:f.y-25,vx:Math.cos(ang)*sp,vy:Math.sin(ang)*sp,t:0.55,color:'#6ef7b2'});
      }
-     sfx('restore');
+     playSfx('restore');
      b.powerup=null;
      return;
     }else if(kind==='heal'){
      const maxHp=f.maxHp||100;
      f.hp=Math.min(maxHp,f.hp+24);
      b.effects.push({x:f.x,y:f.y-100,text:'HP回復！',t:.85});
-     sfx('heal');
+     playSfx('heal');
      b.powerup=null;
      return;
     }else if(kind==='superjump'){
      f.vy=-475;f.windCooldown=2.5;
      b.effects.push({x:f.x,y:f.y-100,text:'スーパージャンプ！',t:.85});
-     sfx('superjump');
+     playSfx('superjump');
      b.powerup=null;
      return;
     }else if(kind==='swap'){
      const tmp=f.x;f.x=other.x;other.x=tmp;f.vx*=-1;other.vx*=-1;
      b.effects.push({x:f.x,y:f.y-100,text:'位置交換！',t:.85});
-     sfx('swap');
+     playSfx('swap');
      b.powerup=null;
      return;
     }else if(kind==='shock'){
-     other.vx+=(other.x>f.x?1:-1)*350;other.vy=-210;damage(other,7);
+     other.vx+=(other.x>f.x?1:-1)*350;other.vy=-210;
+     if(typeof damage==='function')damage(other,7);
      b.effects.push({x:f.x,y:f.y-100,text:'衝撃波！',t:.85});
-     sfx('heavy');
+     playSfx('heavy');
      b.powerup=null;
      return;
     }
@@ -3168,37 +3185,57 @@ onlineUi();
     スマホ全画面切替ボタン ＋ トレーニングCPU方針＆練習リセット
     -------------------------------------------------------------------------- */
  function enterBattleFullscreen(){
-  const el=$('battle');
+  const el=getEl('battle');
   if(!el)return;
   el.classList.add('sa-mobile-fs');
   const req=el.requestFullscreen||el.webkitRequestFullscreen;
   if(req&&!document.fullscreenElement){
    try{const p=req.call(el);if(p&&p.catch)p.catch(()=>{});}catch(e){}
   }
-  if($('arenaFullscreen'))$('arenaFullscreen').textContent='⤢ 全画面解除';
+  if(getEl('arenaFullscreen'))getEl('arenaFullscreen').textContent='⤢ 全画面解除';
  }
  function exitBattleFullscreen(){
-  const el=$('battle');
+  const el=getEl('battle');
   if(el)el.classList.remove('sa-mobile-fs');
   if(document.fullscreenElement){
    const ex=document.exitFullscreen||document.webkitExitFullscreen;
    if(ex){try{ex.call(document);}catch(e){}}
   }
-  if($('arenaFullscreen'))$('arenaFullscreen').textContent='⛶ 全画面';
+  if(getEl('arenaFullscreen'))getEl('arenaFullscreen').textContent='⛶ 全画面';
  }
  document.addEventListener('fullscreenchange',()=>{
-  const active=!!document.fullscreenElement||$('battle')?.classList.contains('sa-mobile-fs');
-  if($('arenaFullscreen'))$('arenaFullscreen').textContent=active?'⤢ 全画面解除':'⛶ 全画面';
+  const active=!!document.fullscreenElement||getEl('battle')?.classList.contains('sa-mobile-fs');
+  if(getEl('arenaFullscreen'))getEl('arenaFullscreen').textContent=active?'⤢ 全画面解除':'⛶ 全画面';
  });
 
+ function applyTrainingAiStyle(fighter){
+  if(!fighter)return;
+  if(trainingStyle==='offense'){
+   fighter.aiStyle='rush';
+  }else if(trainingStyle==='defense'){
+   fighter.aiStyle='guard';
+  }else{
+   fighter.aiStyle='counter';
+  }
+  fighter.aiSwitchAt=Number.POSITIVE_INFINITY;
+ }
+
  function resetTrainingSession(){
-  if(!battle||gameMode!=='training')return;
-  const pItems=(builds[buildIndex]||[]).map(it=>{
-   const bonus=(upgrades[it.type]||0)*5;
-   const mhp=(defs[it.type]?.hp||24)+bonus;
+  if(typeof battle==='undefined'||!battle||typeof gameMode==='undefined'||gameMode!=='training')return;
+  const bArr=typeof builds!=='undefined'?builds:[];
+  const bIdx=typeof buildIndex!=='undefined'?buildIndex:0;
+  const upg=typeof upgrades!=='undefined'?upgrades:{};
+  const dObj=typeof defs!=='undefined'?defs:{};
+
+  const pItems=(bArr[bIdx]||[]).map(it=>{
+   const bonus=(upg[it.type]||0)*5;
+   const mhp=(dObj[it.type]?.hp||24)+bonus;
    return {...it,hp:mhp,maxHp:mhp,cool:0,terrainCool:0};
   });
-  const eItems=cpuItems('adaptive',battle.level||0).map(it=>({...it,hp:it.maxHp,cool:0,terrainCool:0}));
+  const eItems=typeof cpuItems==='function'
+   ?cpuItems('adaptive',battle.level||0).map(it=>({...it,hp:it.maxHp,cool:0,terrainCool:0}))
+   :[];
+
   battle.a.x=160;battle.a.y=290;battle.a.vx=0;battle.a.vy=0;
   battle.a.hp=battle.a.maxHp||100;battle.a.items=pItems;
   battle.a.initialItems=pItems.map(i=>({...i}));
@@ -3224,37 +3261,25 @@ onlineUi();
   battle.hitBursts=[];
   battle.warning=null;
   battle.event=null;
-  initTerrain(battle);
+  if(typeof initTerrain==='function')initTerrain(battle);
   if(battle.camera){
    battle.camera.shake=0;battle.camera.flash=0;battle.camera.slow=0;
    battle.camera.x=480;battle.camera.y=220;battle.camera.scale=1.25;
   }
-  const stName=stages[battle.stage]?.name||battle.stage;
-  $('battlelog').textContent='トレーニング（リセット完了） ／ ステージ：'+stName;
-  sfx('restore');
- }
-
- function applyTrainingAiStyle(fighter){
-  if(!fighter)return;
-  if(trainingStyle==='offense'){
-   fighter.aiStyle='rush';
-  }else if(trainingStyle==='defense'){
-   fighter.aiStyle='guard';
-  }else{
-   fighter.aiStyle='counter';
-  }
-  fighter.aiSwitchAt=Number.POSITIVE_INFINITY;
+  const stName=(typeof stages==='object'&&stages?.[battle.stage]?.name)||battle.stage;
+  if(getEl('battlelog'))getEl('battlelog').textContent='トレーニング（リセット完了） ／ ステージ：'+stName;
+  playSfx('restore');
  }
 
  (function setupBattleBarControls(){
-  const bar=$('battle')?.querySelector('.titlebar');
-  if(!bar||$('arenaFullscreen'))return;
+  const bar=getEl('battle')?.querySelector('.titlebar');
+  if(!bar||getEl('arenaFullscreen'))return;
   const fsBtn=document.createElement('button');
   fsBtn.id='arenaFullscreen';
   fsBtn.type='button';
   fsBtn.textContent='⛶ 全画面';
   fsBtn.onclick=()=>{
-   const active=!!document.fullscreenElement||$('battle')?.classList.contains('sa-mobile-fs');
+   const active=!!document.fullscreenElement||getEl('battle')?.classList.contains('sa-mobile-fs');
    if(active)exitBattleFullscreen();
    else enterBattleFullscreen();
   };
@@ -3274,181 +3299,209 @@ onlineUi();
    <button type="button" id="trainingResetBtn">練習をリセット</button>
   `;
   bar.appendChild(trWrap);
-  $('trainingAiSelect').value=trainingStyle;
-  $('trainingAiSelect').onchange=e=>{
+  getEl('trainingAiSelect').value=trainingStyle;
+  getEl('trainingAiSelect').onchange=e=>{
    trainingStyle=e.target.value;
-   if(battle?.b&&gameMode==='training')applyTrainingAiStyle(battle.b);
-   sfx('cursor');
+   if(typeof battle!=='undefined'&&battle?.b&&typeof gameMode!=='undefined'&&gameMode==='training'){
+    applyTrainingAiStyle(battle.b);
+   }
+   playSfx('cursor');
   };
-  $('trainingResetBtn').onclick=resetTrainingSession;
+  getEl('trainingResetBtn').onclick=resetTrainingSession;
  })();
 
  /* --------------------------------------------------------------------------
-    効果音のゲームイベント連動フック
+    効果音のゲームイベント連動フック（すべて個別に安全保護）
     -------------------------------------------------------------------------- */
- const origHit=hit;
- hit=function(att,def,it,shield){
-  const beforeHp=def.hp;
-  origHit(att,def,it,shield);
-  const dealt=beforeHp-def.hp;
-  if(shield){
-   sfx('guard');
-  }else if(it.type==='hammer'||it.type==='blade'||dealt>=16){
-   sfx('heavy');
-  }else{
-   sfx('attack');
+ try{
+  if(typeof hit==='function'){
+   const origHit=hit;
+   hit=function(att,def,it,shield){
+    const beforeHp=def.hp;
+    origHit(att,def,it,shield);
+    const dealt=beforeHp-def.hp;
+    if(shield)playSfx('guard');
+    else if(it.type==='hammer'||it.type==='blade'||dealt>=16)playSfx('heavy');
+    else playSfx('attack');
+   };
   }
- };
+ }catch(e){}
 
- const origClashWeapons=clashWeapons;
- clashWeapons=function(b,dt){
-  const prevCool=b.a.clashCool;
-  origClashWeapons(b,dt);
-  if(prevCool<=0&&b.a.clashCool>0)sfx('clash');
- };
+ try{
+  if(typeof clashWeapons==='function'){
+   const origClashWeapons=clashWeapons;
+   clashWeapons=function(b,dt){
+    const prevCool=b.a.clashCool;
+    origClashWeapons(b,dt);
+    if(prevCool<=0&&b.a.clashCool>0)playSfx('clash');
+   };
+  }
+ }catch(e){}
 
- const origApplyStun=applyStun;
- applyStun=function(f,amount){
-  const wasStunned=(f.stun||0)>0;
-  origApplyStun(f,amount);
-  if(!wasStunned&&(f.stun||0)>0)sfx('stun');
- };
+ try{
+  if(typeof applyStun==='function'){
+   const origApplyStun=applyStun;
+   applyStun=function(f,amount){
+    const wasStunned=(f.stun||0)>0;
+    origApplyStun(f,amount);
+    if(!wasStunned&&(f.stun||0)>0)playSfx('stun');
+   };
+  }
+ }catch(e){}
 
- const origDestroy=destroy;
- destroy=function(f,it){
-  origDestroy(f,it);
-  sfx('break');
- };
+ try{
+  if(typeof destroy==='function'){
+   const origDestroy=destroy;
+   destroy=function(f,it){
+    origDestroy(f,it);
+    playSfx('break');
+   };
+  }
+ }catch(e){}
 
- const origFinish=finish;
- finish=function(){
-  const win=battle&&battle.a.hp>battle.b.hp;
-  origFinish();
-  sfx(win?'victory':'defeat');
-  exitBattleFullscreen();
- };
+ try{
+  if(typeof finish==='function'){
+   const origFinish=finish;
+   finish=function(){
+    const win=typeof battle!=='undefined'&&battle&&battle.a.hp>battle.b.hp;
+    origFinish();
+    playSfx(win?'victory':'defeat');
+    exitBattleFullscreen();
+   };
+  }
+ }catch(e){}
 
- $('editor')?.addEventListener('pointerdown',()=>{
-  setTimeout(()=>{if(selected)sfx('attach');},0);
+ getEl('editor')?.addEventListener('pointerdown',()=>{
+  setTimeout(()=>{if(typeof selected!=='undefined'&&selected)playSfx('attach');},0);
  });
- $('remove')?.addEventListener('click',()=>sfx('detach'));
- $('clear')?.addEventListener('click',()=>{if(!resetArmed)sfx('detach');});
+ getEl('remove')?.addEventListener('click',()=>playSfx('detach'));
+ getEl('clear')?.addEventListener('click',()=>{if(typeof resetArmed==='undefined'||!resetArmed)playSfx('detach');});
 
  /* --------------------------------------------------------------------------
     バトル開始・更新・描画の統合フック
     -------------------------------------------------------------------------- */
- const origStartBattle=startBattle;
- startBattle=function(kind='adaptive',continuation=false){
-  if(gameMode==='tournament'||randomStageMode||gameMode==='ghost'){
-   stageKey=pickRandomStage();
-  }else if(gameMode==='online'&&onlineSession?.isHost){
-   stageKey=pickRandomStage();
-   if(onlineDb&&onlineSession.code){
-    onlineDb.ref('rooms/'+onlineSession.code).update({stage:stageKey}).catch(()=>{});
-   }
-  }
-  origStartBattle(kind,continuation);
-
-  if(battle){
-   if(gameMode==='training'&&battle.b){
-    applyTrainingAiStyle(battle.b);
-   }
-   if(gameMode==='ghost'&&ghostOpponent&&battle.b){
-    const gItems=(ghostOpponent.items||[]).map(it=>{
-     const mhp=Number(it.maxHp)||defs[it.type]?.hp||24;
-     return {...it,hp:mhp,maxHp:mhp,cool:0,terrainCool:0};
-    });
-    battle.b.items=gItems;
-    battle.b.initialItems=gItems.map(i=>({...i}));
-    battle.b.color=ghostOpponent.color||'#ffc1c8';
-    battle.b.orn=ghostOpponent.orn||'star';
-    const gStyle=ghostOpponent.aiStyle||'balanced';
-    battle.b.aiStyle=gStyle==='offense'?'rush':gStyle==='defense'?'guard':'counter';
-    battle.b.aiSwitchAt=Number.POSITIVE_INFINITY;
-   }
-   const stageName=stages[battle.stage]?.name||battle.stage;
-   const prefix=gameMode==='ghost'&&ghostOpponent?`GHOST対戦 vs ${ghostOpponent.name} ／ `:'';
-   if($('battlelog')){
-    $('battlelog').textContent=prefix+$('battlelog').textContent+' ／ ステージ：'+stageName;
-   }
-  }
-  if(isMobile())enterBattleFullscreen();
- };
-
- const origUpdate=update;
- update=function(dt){
-  const b=battle;
-  const hadWarning=!!b?.warning;
-  const prevPowerupCount=b?.powerupCount||0;
-  const prevBullets=b?.bullets?.length||0;
-  const prevWarpA=b?.a?.warpCooldown||0;
-  const prevWarpB=b?.b?.warpCooldown||0;
-  const prevWindA=b?.a?.windCooldown||0;
-  const prevWindB=b?.b?.windCooldown||0;
-
-  if(b){
-   stepRestoreAndCustomPickups(b);
-  }
-  origUpdate(dt);
-
-  if(!b)return;
-  if(!hadWarning&&b.warning)sfx('warning');
-  if((b.bullets?.length||0)>prevBullets)sfx('gun');
-  if((b.a?.warpCooldown||0)>prevWarpA||(b.b?.warpCooldown||0)>prevWarpB)sfx('warp');
-  if((b.a?.windCooldown||0)>prevWindA||(b.b?.windCooldown||0)>prevWindB)sfx('wind');
-
-  if(b.powerupCount>prevPowerupCount&&b.powerup){
-   const pool=stageHasPlatforms(b)?['swap','heal','shock','restore']:['swap','superjump','heal','shock','restore'];
-   b.powerup.kind=pool[(b.powerupCount-1)%pool.length];
-  }
- };
-
- const origDrawBattleFn=drawBattle;
- drawBattle=function(){
-  origDrawBattleFn();
-  const b=battle;
-  const arena=$('arena');
-  if(!b||!arena)return;
-  if(b.powerup&&b.powerup.kind==='restore'){
-   const c=arena.getContext('2d');
-   const cam=b.camera||{x:480,y:220,scale:1.25};
-   c.save();
-   c.translate(480,220);c.scale(cam.scale,cam.scale);c.translate(-cam.x,-cam.y);
-   const p=b.powerup,py=p.y+Math.sin(b.time*5)*8;
-   c.translate(p.x,py);
-   c.fillStyle='#59e8a5';
-   c.strokeStyle='#0c3b28';
-   c.lineWidth=3;
-   c.beginPath();c.arc(0,0,26,0,Math.PI*2);c.fill();c.stroke();
-   c.fillStyle='#09281b';
-   c.font='bold 13px system-ui';
-   c.textAlign='center';c.textBaseline='middle';
-   c.fillText('復元',0,1);
-   c.restore();
-  }
- };
-
- if(typeof onlineDb!=='undefined'){
-  setInterval(()=>{
-   if(gameMode==='online'&&onlineSession&&!onlineSession.isHost&&onlineDb&&onlineSession.code&&battle){
-    onlineDb.ref('rooms/'+onlineSession.code+'/stage').get().then(snap=>{
-     const st=snap.val();
-     if(st&&stages[st]&&battle.stage!==st){
-      battle.stage=st;
-      initTerrain(battle);
-      if($('battlelog')){
-       $('battlelog').textContent='オンライン対戦 ／ ステージ：'+stages[st].name;
-      }
+ try{
+  if(typeof startBattle==='function'){
+   const origStartBattle=startBattle;
+   startBattle=function(kind='adaptive',continuation=false){
+    const gm=typeof gameMode!=='undefined'?gameMode:'';
+    if(gm==='tournament'||randomStageMode||gm==='ghost'){
+     if(typeof stageKey!=='undefined')stageKey=pickRandomStage();
+    }else if(gm==='online'&&typeof onlineSession!=='undefined'&&onlineSession?.isHost){
+     if(typeof stageKey!=='undefined')stageKey=pickRandomStage();
+     if(typeof onlineDb!=='undefined'&&onlineDb&&onlineSession.code){
+      onlineDb.ref('rooms/'+onlineSession.code).update({stage:stageKey}).catch(()=>{});
      }
-    }).catch(()=>{});
-   }
-  },1200);
- }
+    }
+    origStartBattle(kind,continuation);
+
+    if(typeof battle!=='undefined'&&battle){
+     if(gm==='training'&&battle.b){
+      applyTrainingAiStyle(battle.b);
+     }
+     if(gm==='ghost'&&ghostOpponent&&battle.b){
+      const dObj=typeof defs!=='undefined'?defs:{};
+      const gItems=(ghostOpponent.items||[]).map(it=>{
+       const mhp=Number(it.maxHp)||dObj[it.type]?.hp||24;
+       return {...it,hp:mhp,maxHp:mhp,cool:0,terrainCool:0};
+      });
+      battle.b.items=gItems;
+      battle.b.initialItems=gItems.map(i=>({...i}));
+      battle.b.color=ghostOpponent.color||'#ffc1c8';
+      battle.b.orn=ghostOpponent.orn||'star';
+      const gStyle=ghostOpponent.aiStyle||'balanced';
+      battle.b.aiStyle=gStyle==='offense'?'rush':gStyle==='defense'?'guard':'counter';
+      battle.b.aiSwitchAt=Number.POSITIVE_INFINITY;
+     }
+     const stageName=(typeof stages==='object'&&stages?.[battle.stage]?.name)||battle.stage;
+     const prefix=gm==='ghost'&&ghostOpponent?`GHOST対戦 vs ${ghostOpponent.name} ／ `:'';
+     if(getEl('battlelog')){
+      getEl('battlelog').textContent=prefix+getEl('battlelog').textContent+' ／ ステージ：'+stageName;
+     }
+    }
+    if(isMobile())enterBattleFullscreen();
+   };
+  }
+ }catch(e){}
+
+ try{
+  if(typeof update==='function'){
+   const origUpdate=update;
+   update=function(dt){
+    const b=typeof battle!=='undefined'?battle:null;
+    const hadWarning=!!b?.warning;
+    const prevPowerupCount=b?.powerupCount||0;
+    const prevBullets=b?.bullets?.length||0;
+    const prevWarpA=b?.a?.warpCooldown||0;
+    const prevWarpB=b?.b?.warpCooldown||0;
+    const prevWindA=b?.a?.windCooldown||0;
+    const prevWindB=b?.b?.windCooldown||0;
+
+    if(b)stepRestoreAndCustomPickups(b);
+    origUpdate(dt);
+
+    if(!b)return;
+    if(!hadWarning&&b.warning)playSfx('warning');
+    if((b.bullets?.length||0)>prevBullets)playSfx('gun');
+    if((b.a?.warpCooldown||0)>prevWarpA||(b.b?.warpCooldown||0)>prevWarpB)playSfx('warp');
+    if((b.a?.windCooldown||0)>prevWindA||(b.b?.windCooldown||0)>prevWindB)playSfx('wind');
+
+    if(b.powerupCount>prevPowerupCount&&b.powerup){
+     const pool=stageHasPlatforms(b)?['swap','heal','shock','restore']:['swap','superjump','heal','shock','restore'];
+     b.powerup.kind=pool[(b.powerupCount-1)%pool.length];
+    }
+   };
+  }
+ }catch(e){}
+
+ try{
+  if(typeof drawBattle==='function'){
+   const origDrawBattleFn=drawBattle;
+   drawBattle=function(){
+    origDrawBattleFn();
+    const b=typeof battle!=='undefined'?battle:null;
+    const arena=getEl('arena');
+    if(!b||!arena)return;
+    if(b.powerup&&b.powerup.kind==='restore'){
+     const c=arena.getContext('2d');
+     const cam=b.camera||{x:480,y:220,scale:1.25};
+     c.save();
+     c.translate(480,220);c.scale(cam.scale,cam.scale);c.translate(-cam.x,-cam.y);
+     const p=b.powerup,py=p.y+Math.sin(b.time*5)*8;
+     c.translate(p.x,py);
+     c.fillStyle='#59e8a5';
+     c.strokeStyle='#0c3b28';
+     c.lineWidth=3;
+     c.beginPath();c.arc(0,0,26,0,Math.PI*2);c.fill();c.stroke();
+     c.fillStyle='#09281b';
+     c.font='bold 13px system-ui';
+     c.textAlign='center';c.textBaseline='middle';
+     c.fillText('復元',0,1);
+     c.restore();
+    }
+   };
+  }
+ }catch(e){}
+
+ setInterval(()=>{
+  if(typeof gameMode!=='undefined'&&gameMode==='online'&&typeof onlineSession!=='undefined'&&onlineSession&&!onlineSession.isHost&&typeof onlineDb!=='undefined'&&onlineDb&&onlineSession.code&&typeof battle!=='undefined'&&battle){
+   onlineDb.ref('rooms/'+onlineSession.code+'/stage').get().then(snap=>{
+    const st=snap.val();
+    if(st&&typeof stages==='object'&&stages[st]&&battle.stage!==st){
+     battle.stage=st;
+     if(typeof initTerrain==='function')initTerrain(battle);
+     if(getEl('battlelog')){
+      getEl('battlelog').textContent='オンライン対戦 ／ ステージ：'+stages[st].name;
+     }
+    }
+   }).catch(()=>{});
+  }
+ },1200);
 
  /* --------------------------------------------------------------------------
     GHOST ARENA（オンライン＆ローカル登録・一覧選択・公式ライバル常設）
     -------------------------------------------------------------------------- */
- MODES.ghost='GHOST ARENA';
+ try{if(typeof MODES==='object'&&MODES)MODES.ghost='GHOST ARENA';}catch(e){}
  const GHOST_LOCAL_KEY='sleep_arena_ghosts_v2';
  const OFFICIAL_RIVALS=[
   {
@@ -3492,7 +3545,7 @@ onlineUi();
  }
 
  function ensureGhostModal(){
-  if($('ghostModal'))return;
+  if(getEl('ghostModal'))return;
   const modal=document.createElement('div');
   modal.id='ghostModal';
   modal.innerHTML=`
@@ -3536,16 +3589,16 @@ onlineUi();
    </div>
   `;
   document.body.appendChild(modal);
-  $('ghostCloseBtn').onclick=()=>{modal.style.display='none';};
-  $('ghostRegisterBtn').onclick=registerMyGhost;
-  $('ghostRefreshBtn').onclick=()=>refreshGhostRoster(true);
+  getEl('ghostCloseBtn').onclick=()=>{modal.style.display='none';};
+  getEl('ghostRegisterBtn').onclick=registerMyGhost;
+  getEl('ghostRefreshBtn').onclick=()=>refreshGhostRoster(true);
  }
 
  function drawMiniGhostSprite(canvas,gCol,gOrn){
   if(!canvas)return;
   const c=canvas.getContext('2d');
   c.clearRect(0,0,canvas.width,canvas.height);
-  sprite(c,canvas.width/2,canvas.height/2+6,56,gCol||'#ffffff',gOrn||'moon');
+  customSprite(c,canvas.width/2,canvas.height/2+6,56,gCol||'#ffffff',gOrn||'moon');
  }
 
  function styleLabel(st){
@@ -3553,15 +3606,16 @@ onlineUi();
  }
 
  function renderGhostRoster(){
-  const listEl=$('ghostRosterList');
+  const listEl=getEl('ghostRosterList');
   if(!listEl)return;
+  const dObj=typeof defs!=='undefined'?defs:{};
   const locals=loadLocalGhosts().map(g=>({...g,source:'ローカル保存'}));
   const remotes=remoteGhostsCache.map(g=>({...g,source:'オンライン'}));
   const officials=OFFICIAL_RIVALS.map(g=>({...g,source:'公式ライバル'}));
   const merged=[...remotes,...locals,...officials];
 
   listEl.innerHTML=merged.map((g,idx)=>{
-   const itemNames=(g.items||[]).map(it=>defs[it.type]?.name||it.type).join('・')||'素手';
+   const itemNames=(g.items||[]).map(it=>dObj[it.type]?.name||it.type).join('・')||'素手';
    return `
     <div class="ghost-row">
      <canvas data-ghost-cv="${idx}" width="58" height="58"></canvas>
@@ -3583,85 +3637,97 @@ onlineUi();
    if(btn){
     btn.onclick=()=>{
      ghostOpponent=g;
-     gameMode='ghost';
-     matchWins=[0,0];
-     matchRound=0;
-     $('ghostModal').style.display='none';
-     sfx('decide');
-     startBattle('adaptive');
+     if(typeof gameMode!=='undefined')gameMode='ghost';
+     if(typeof matchWins!=='undefined')matchWins=[0,0];
+     if(typeof matchRound!=='undefined')matchRound=0;
+     getEl('ghostModal').style.display='none';
+     playSfx('decide');
+     if(typeof startBattle==='function')startBattle('adaptive');
     };
    }
   });
  }
 
  async function refreshGhostRoster(showToast=false){
-  if(showToast&&$('ghostStatusMsg'))$('ghostStatusMsg').textContent='オンラインゴーストを取得中…';
+  if(showToast&&getEl('ghostStatusMsg'))getEl('ghostStatusMsg').textContent='オンラインゴーストを取得中…';
   try{
    if(typeof connectFirebaseOnline==='function')await connectFirebaseOnline();
-   if(onlineDb){
+   if(typeof onlineDb!=='undefined'&&onlineDb){
     const snap=await onlineDb.ref('ghosts').limitToLast(30).get();
     const val=snap.val()||{};
     remoteGhostsCache=Object.values(val)
      .filter(g=>g&&Array.isArray(g.items)&&g.items.length>0)
      .sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
-    if(showToast&&$('ghostStatusMsg')){
-     $('ghostStatusMsg').textContent=`オンラインゴースト ${remoteGhostsCache.length}件を読み込みました。`;
+    if(showToast&&getEl('ghostStatusMsg')){
+     getEl('ghostStatusMsg').textContent=`オンラインゴースト ${remoteGhostsCache.length}件を読み込みました。`;
     }
    }
   }catch(e){
-   if(showToast&&$('ghostStatusMsg')){
-    $('ghostStatusMsg').textContent='オンライン取得に失敗しましたが、ローカル保存＆公式ライバルと対戦できます。';
+   if(showToast&&getEl('ghostStatusMsg')){
+    getEl('ghostStatusMsg').textContent='オンライン取得に失敗しましたが、ローカル保存＆公式ライバルと対戦できます。';
    }
   }
   renderGhostRoster();
  }
 
  async function registerMyGhost(){
-  const curItems=(builds[buildIndex]||[]).map(it=>{
-   const bonus=(upgrades[it.type]||0)*5;
-   const mhp=(defs[it.type]?.hp||24)+bonus;
+  const bArr=typeof builds!=='undefined'?builds:[];
+  const bIdx=typeof buildIndex!=='undefined'?buildIndex:0;
+  const upg=typeof upgrades!=='undefined'?upgrades:{};
+  const dObj=typeof defs!=='undefined'?defs:{};
+  const curColor=typeof color!=='undefined'?color:'#ffffff';
+  const curOrn=typeof orn!=='undefined'?orn:'moon';
+
+  const curItems=(bArr[bIdx]||[]).map(it=>{
+   const bonus=(upg[it.type]||0)*5;
+   const mhp=(dObj[it.type]?.hp||24)+bonus;
    return {id:it.id,type:it.type,parent:it.parent,x:it.x,y:it.y,angle:it.angle,hp:mhp,maxHp:mhp};
   });
   if(!curItems.length){
-   $('ghostStatusMsg').textContent='装備が0個です。「装備・BUILD」でパーツを配置してから登録してください。';
+   getEl('ghostStatusMsg').textContent='装備が0個です。「装備・BUILD」でパーツを配置してから登録してください。';
    return;
   }
-  const rawName=($('ghostNameInput')?.value||'').trim();
+  const rawName=(getEl('ghostNameInput')?.value||'').trim();
   const gName=rawName||('GHOST-'+Math.random().toString(36).slice(2,6).toUpperCase());
-  const aiStyle=$('ghostAiPolicy')?.value||'balanced';
+  const aiStyle=getEl('ghostAiPolicy')?.value||'balanced';
   const gid='g_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
-  const record={id:gid,name:gName,items:curItems,color,orn,aiStyle,createdAt:Date.now()};
+  const record={id:gid,name:gName,items:curItems,color:curColor,orn:curOrn,aiStyle,createdAt:Date.now()};
 
   const locals=loadLocalGhosts();
   locals.unshift(record);
   saveLocalGhosts(locals);
   renderGhostRoster();
-  sfx('restore');
-  $('ghostStatusMsg').textContent=`「${gName}」をローカルに保存しました。Firebaseへ登録中…`;
+  playSfx('restore');
+  getEl('ghostStatusMsg').textContent=`「${gName}」をローカルに保存しました。Firebaseへ登録中…`;
 
   try{
    if(typeof connectFirebaseOnline==='function')await connectFirebaseOnline();
-   if(onlineDb){
+   if(typeof onlineDb!=='undefined'&&onlineDb){
+    const uid=(typeof onlineUser!=='undefined'&&onlineUser?.uid)||gid;
     const payload=typeof onlineFirebaseSafe==='function'
-     ?onlineFirebaseSafe({...record,uid:onlineUser?.uid||gid})
-     :{...record,uid:onlineUser?.uid||gid};
+     ?onlineFirebaseSafe({...record,uid})
+     :{...record,uid};
     await onlineDb.ref('ghosts/'+gid).set(payload);
-    $('ghostStatusMsg').textContent=`「${gName}」をオンライン（Firebase）と端末の両方に登録しました！`;
+    getEl('ghostStatusMsg').textContent=`「${gName}」をオンライン（Firebase）と端末の両方に登録しました！`;
     await refreshGhostRoster(false);
    }else{
-    $('ghostStatusMsg').textContent=`「${gName}」をローカル保存しました（オフラインモードでも対戦可能）。`;
+    getEl('ghostStatusMsg').textContent=`「${gName}」をローカル保存しました（オフラインモードでも対戦可能）。`;
    }
   }catch(e){
-   $('ghostStatusMsg').textContent=`ローカル保存完了！（オンライン登録はスキップ：${e?.message||'接続不可'}）`;
+   getEl('ghostStatusMsg').textContent=`ローカル保存完了！（オンライン登録はスキップ：${e?.message||'接続不可'}）`;
   }
  }
 
  function openGhostArena(){
   ensureGhostModal();
-  $('ghostBuildNum').textContent=String(buildIndex+1);
-  $('ghostPartCount').textContent=String((builds[buildIndex]||[]).length);
-  drawMiniGhostSprite($('myGhostPreview'),color,orn);
-  $('ghostModal').style.display='flex';
+  const bArr=typeof builds!=='undefined'?builds:[];
+  const bIdx=typeof buildIndex!=='undefined'?buildIndex:0;
+  const curColor=typeof color!=='undefined'?color:'#ffffff';
+  const curOrn=typeof orn!=='undefined'?orn:'moon';
+  getEl('ghostBuildNum').textContent=String(bIdx+1);
+  getEl('ghostPartCount').textContent=String((bArr[bIdx]||[]).length);
+  drawMiniGhostSprite(getEl('myGhostPreview'),curColor,curOrn);
+  getEl('ghostModal').style.display='flex';
   renderGhostRoster();
   refreshGhostRoster(false);
  }
@@ -3670,7 +3736,7 @@ onlineUi();
     メニュー画面（#home）を元の画面に戻し、追加ボタンをメニューに統合
     -------------------------------------------------------------------------- */
  function ensureHomeMenuRestored(){
-  const home=$('home');
+  const home=getEl('home');
   if(!home)return;
   home.querySelectorAll('.dq-wrap').forEach(el=>el.remove());
   home.style.opacity='1';
@@ -3679,23 +3745,59 @@ onlineUi();
   const menu=home.querySelector('.menu');
   if(!menu)return;
 
-  if(!$('homeGhost')){
+  if(!getEl('homeGhost')){
    const gb=document.createElement('button');
    gb.className='menu-item';
    gb.id='homeGhost';
    gb.innerHTML='<div class="menu-icon">👻</div>GHOST ARENA';
-   gb.addEventListener('click',()=>{sfx('decide');openGhostArena();});
+   gb.addEventListener('click',()=>{playSfx('decide');openGhostArena();});
    menu.appendChild(gb);
   }
-  if(!$('homeOnline')&&typeof openOnlinePanel==='function'){
+  if(!getEl('homeOnline')&&typeof openOnlinePanel==='function'){
    const ob=document.createElement('button');
    ob.className='menu-item';
    ob.id='homeOnline';
    ob.innerHTML='<div class="menu-icon blue">🌐</div>オンライン対戦';
-   ob.addEventListener('click',()=>{sfx('decide');openOnlinePanel();});
+   ob.addEventListener('click',()=>{playSfx('decide');openOnlinePanel();});
    menu.appendChild(ob);
   }
  }
+
+ /* --------------------------------------------------------------------------
+    画面遷移（go）の安全なラッパー（黒画面フリーズを完全防止）
+    -------------------------------------------------------------------------- */
+ function navigateTo(next){
+  if(next!=='battle')exitBattleFullscreen();
+  if(typeof origGoFn==='function'){
+   try{
+    origGoFn(next);
+   }catch(e){
+    console.warn('go fallback:',e);
+   }
+  }
+  // 念のため対象画面が確実に表示状態になるように保証
+  const target=getEl(next);
+  if(target&&!target.classList.contains('on')){
+   document.querySelectorAll('.screen').forEach(el=>el.classList.toggle('on',el.id===next));
+   try{if(typeof screen!=='undefined')screen=next;}catch(_){}
+  }
+  if(next==='title')renderDqTitleScreen();
+  if(next==='home')ensureHomeMenuRestored();
+  if(next==='equip'&&typeof renderEquip==='function'){try{renderEquip();}catch(_){}}
+  if(next==='options'&&typeof renderOptions==='function'){try{renderOptions();}catch(_){}}
+  if(getEl('trainingBarControls')){
+   const gm=typeof gameMode!=='undefined'?gameMode:'';
+   getEl('trainingBarControls').style.display=(next==='battle'&&gm==='training')?'inline-flex':'none';
+  }
+ }
+
+ let origGoFn=null;
+ try{
+  if(typeof go==='function'){
+   origGoFn=go;
+   go=navigateTo;
+  }
+ }catch(e){}
 
  /* --------------------------------------------------------------------------
     タイトル画面（#title）をドラクエ風の選択式コマンド画面へ刷新
@@ -3704,49 +3806,61 @@ onlineUi();
   {
    label:'ぼうけんを はじめる',
    tag:'MENU',
-   action:()=>go('home')
+   action:()=>navigateTo('home')
   },
   {
    label:'クイックバトル',
    tag:'BATTLE',
-   action:()=>{gameMode='single';matchWins=[0,0];matchRound=0;go('stages');}
+   action:()=>{
+    try{if(typeof gameMode!=='undefined')gameMode='single';}catch(_){}
+    try{if(typeof matchWins!=='undefined')matchWins=[0,0];}catch(_){}
+    try{if(typeof matchRound!=='undefined')matchRound=0;}catch(_){}
+    navigateTo('stages');
+   }
   },
   {
    label:'せってい',
    tag:'OPTION',
-   action:()=>go('options')
+   action:()=>navigateTo('options')
   }
  ];
 
  function getDqTitleMessage(){
-  const wins=Number.isFinite(cpuWins)?cpuWins:0;
-  const bNum=(Number.isFinite(buildIndex)?buildIndex:0)+1;
-  const pCount=(builds?.[buildIndex]||[]).length;
-  return `＊「ようこそ <strong>SLEEP ARENA</strong> の せかいへ！<br> つう算しょうり：<strong>${wins}かい</strong> ／ BUILD ${bNum}（そうび ${pCount}こ）」`;
+  const wins=(typeof cpuWins!=='undefined'&&Number.isFinite(cpuWins))?cpuWins:0;
+  const bIdx=(typeof buildIndex!=='undefined'&&Number.isFinite(buildIndex))?buildIndex:0;
+  const bArr=typeof builds!=='undefined'?builds:[];
+  const pCount=(bArr[bIdx]||[]).length;
+  return `＊「ようこそ <strong>SLEEP ARENA</strong> の せかいへ！<br> つう算しょうり：<strong>${wins}かい</strong> ／ BUILD ${bIdx+1}（そうび ${pCount}こ）」`;
  }
 
  function drawDqTitleEmblem(){
-  const cv=$('dqTitleEmblemCanvas');
+  const cv=getEl('dqTitleEmblemCanvas');
   if(!cv)return;
   const c=cv.getContext('2d');
   c.clearRect(0,0,cv.width,cv.height);
-  sprite(c,cv.width/2,cv.height/2+7,58,color,orn);
+  const curColor=typeof color!=='undefined'?color:'#ffffff';
+  const curOrn=typeof orn!=='undefined'?orn:'moon';
+  customSprite(c,cv.width/2,cv.height/2+7,58,curColor,curOrn);
  }
 
  function updateDqTitleSelection(){
-  const listEl=$('dqTitleCommandList');
+  const listEl=getEl('dqTitleCommandList');
   if(!listEl)return;
   listEl.querySelectorAll('.dq-item').forEach((el,i)=>{
    const active=i===dqTitleIndex;
    el.classList.toggle('active',active);
    el.setAttribute('aria-selected',String(active));
   });
-  if($('dqTitleMsgBox'))$('dqTitleMsgBox').innerHTML=getDqTitleMessage();
+  const msgHtml=getDqTitleMessage();
+  if(msgHtml!==lastTitleMsgCache&&getEl('dqTitleMsgBox')){
+   getEl('dqTitleMsgBox').innerHTML=msgHtml;
+   lastTitleMsgCache=msgHtml;
+  }
   drawDqTitleEmblem();
  }
 
  function renderDqTitleScreen(){
-  const titleEl=$('title');
+  const titleEl=getEl('title');
   if(!titleEl)return;
 
   if(!titleEl.querySelector('.dq-stars')){
@@ -3776,89 +3890,81 @@ onlineUi();
    titleEl.appendChild(wrap);
   }
 
-  const listEl=$('dqTitleCommandList');
-  listEl.innerHTML=DQ_TITLE_COMMANDS.map((cmd,i)=>`
-   <li class="dq-item ${i===dqTitleIndex?'active':''}" data-dq-title-idx="${i}" role="option" aria-selected="${i===dqTitleIndex}">
-    <span class="dq-cursor">▶</span>
-    <span>${cmd.label}</span>
-    <span class="dq-tag">${cmd.tag}</span>
-   </li>
-  `).join('');
+  const listEl=getEl('dqTitleCommandList');
+  if(!listEl)return;
 
-  listEl.querySelectorAll('.dq-item').forEach(el=>{
-   const idx=Number(el.dataset.dqTitleIdx);
-   el.onmouseenter=()=>{
-    if(dqTitleIndex!==idx){
+  // 毎フレームのinnerHTML再生成によるクリック無効化を防ぐため、初回のみ構築
+  if(listEl.children.length!==DQ_TITLE_COMMANDS.length){
+   listEl.innerHTML=DQ_TITLE_COMMANDS.map((cmd,i)=>`
+    <li class="dq-item ${i===dqTitleIndex?'active':''}" data-dq-title-idx="${i}" role="option" aria-selected="${i===dqTitleIndex}">
+     <span class="dq-cursor">▶</span>
+     <span>${cmd.label}</span>
+     <span class="dq-tag">${cmd.tag}</span>
+    </li>
+   `).join('');
+
+   listEl.querySelectorAll('.dq-item').forEach(el=>{
+    const idx=Number(el.dataset.dqTitleIdx);
+    el.addEventListener('pointerenter',()=>{
+     if(dqTitleIndex!==idx){
+      dqTitleIndex=idx;
+      playSfx('cursor');
+      updateDqTitleSelection();
+     }
+    });
+    el.addEventListener('click',e=>{
+     e.stopPropagation();
      dqTitleIndex=idx;
-     sfx('cursor');
      updateDqTitleSelection();
-    }
-   };
-   el.onclick=()=>{
-    dqTitleIndex=idx;
-    updateDqTitleSelection();
-    sfx('decide');
-    DQ_TITLE_COMMANDS[idx].action();
-   };
-  });
+     playSfx('decide');
+     DQ_TITLE_COMMANDS[idx].action();
+    });
+   });
+  }
 
+  // UIの準備が完了してから従来のタイトル要素を隠す
+  titleEl.classList.add('dq-ready');
   updateDqTitleSelection();
  }
 
- const origDrawTitle=typeof drawTitle==='function'?drawTitle:null;
- drawTitle=function(){
-  if(origDrawTitle){
-   try{origDrawTitle();}catch(e){}
+ try{
+  if(typeof drawTitle==='function'){
+   const origDrawTitle=drawTitle;
+   drawTitle=function(){
+    try{origDrawTitle();}catch(e){}
+    renderDqTitleScreen();
+   };
   }
-  renderDqTitleScreen();
- };
+ }catch(e){}
 
  document.addEventListener('keydown',e=>{
-  if(screen!=='title')return;
-  if($('ghostModal')?.style.display==='flex')return;
-  if($('onlineOverlay')?.style.display==='flex')return;
+  const titleEl=getEl('title');
+  const isTitleActive=(typeof screen!=='undefined'&&screen==='title')||titleEl?.classList.contains('on');
+  if(!isTitleActive)return;
+  if(getEl('ghostModal')?.style.display==='flex')return;
+  if(getEl('onlineOverlay')?.style.display==='flex')return;
   if(e.key==='ArrowUp'||e.key==='w'||e.key==='W'){
    e.preventDefault();
    dqTitleIndex=(dqTitleIndex-1+DQ_TITLE_COMMANDS.length)%DQ_TITLE_COMMANDS.length;
-   sfx('cursor');
+   playSfx('cursor');
    updateDqTitleSelection();
   }else if(e.key==='ArrowDown'||e.key==='s'||e.key==='S'){
    e.preventDefault();
    dqTitleIndex=(dqTitleIndex+1)%DQ_TITLE_COMMANDS.length;
-   sfx('cursor');
+   playSfx('cursor');
    updateDqTitleSelection();
   }else if(e.key==='Enter'||e.key===' '){
    e.preventDefault();
-   sfx('decide');
+   playSfx('decide');
    DQ_TITLE_COMMANDS[dqTitleIndex].action();
   }
  });
 
- const origGoHook=go;
- go=function(next){
-  if(next!=='battle')exitBattleFullscreen();
-  try{
-   origGoHook(next);
-  }catch(e){
-   console.warn('go error',e);
-   document.querySelectorAll('.screen').forEach(el=>el.classList.toggle('on',el.id===next));
-   try{screen=next;}catch(_){}
-  }
-  if(next==='title')renderDqTitleScreen();
-  if(next==='home')ensureHomeMenuRestored();
-  if(next==='equip')renderEquip();
-  if(next==='options')renderOptions();
-  if($('trainingBarControls')){
-   $('trainingBarControls').style.display=(next==='battle'&&gameMode==='training')?'inline-flex':'none';
-  }
- };
-
  // 初期描画の反映
  ensureHomeMenuRestored();
  renderDqTitleScreen();
- drawTitle();
- renderEquip();
- renderOptions();
+ if(typeof renderEquip==='function'){try{renderEquip();}catch(_){}}
+ if(typeof renderOptions==='function'){try{renderOptions();}catch(_){}}
 })();
 </script>
 </body></html>
