@@ -2918,6 +2918,1218 @@ onlineUi();
  }
 
  ensureGhostUi();
+/* ============================================================================
+   SLEEP ARENA 統合アップデート（項目 1〜8 完全実装）
+   ============================================================================ */
+(()=>{
+ if(window.__saUnifiedPatchApplied)return;
+ window.__saUnifiedPatchApplied=true;
+
+ const isMobile=()=>/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)||matchMedia('(max-width: 768px)').matches||('ontouchstart' in window&&window.innerWidth<=900);
+ const allStageKeys=Object.keys(stages);
+ const pickRandomStage=()=>allStageKeys[Math.floor(Math.random()*allStageKeys.length)]||'grass';
+
+ let randomStageMode=false;
+ let trainingStyle='balanced';
+ let ghostOpponent=null;
+ let dqIndex=0;
+
+ /* --------------------------------------------------------------------------
+    スタイル追加（ドラクエ風ホーム・GHOST ARENA・スマホ1.28倍表示・画面遷移演出）
+    -------------------------------------------------------------------------- */
+ const patchStyle=document.createElement('style');
+ patchStyle.textContent=`
+  /* 画面遷移フェード＆スライド演出 */
+  .screen.on{animation:saSlideFade .26s cubic-bezier(.22,.8,.36,1) both!important}
+  @keyframes saSlideFade{
+   from{opacity:0;transform:translateY(12px) scale(.992)}
+   to{opacity:1;transform:none}
+  }
+
+  /* 8. ドラクエ風ホーム画面 */
+  #home.screen.on{
+   background:radial-gradient(circle at 50% 25%,#122038 0%,#060911 72%)!important;
+   display:flex!important;
+   flex-direction:column;
+   align-items:center;
+   justify-content:center;
+   padding:16px!important;
+  }
+  #home .titlebar{display:none!important}
+  #home .menu{display:none!important}
+  .dq-wrap{
+   width:min(560px,96vw);
+   display:flex;
+   flex-direction:column;
+   gap:14px;
+   font-family:"Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP",monospace,sans-serif;
+  }
+  .dq-window{
+   background:#070b14;
+   color:#ffffff;
+   border:3px solid #ffffff;
+   border-radius:10px;
+   box-shadow:0 0 0 3px #070b14,0 14px 36px rgba(0,0,0,.75),inset 0 0 0 2px #8fb4d8;
+   padding:18px 22px;
+  }
+  .dq-header{
+   display:flex;
+   align-items:center;
+   justify-content:space-between;
+   border-bottom:2px solid #ffffff55;
+   padding-bottom:10px;
+   margin-bottom:14px;
+  }
+  .dq-title{
+   font-size:clamp(22px,4.5vw,30px);
+   font-weight:900;
+   letter-spacing:3px;
+   color:#ffe66d;
+   text-shadow:2px 2px 0 #000;
+  }
+  .dq-back-btn{
+   background:#0d1626!important;
+   color:#fff!important;
+   border:2px solid #fff!important;
+   border-radius:6px!important;
+   padding:6px 12px!important;
+   font-size:12px!important;
+   min-height:34px!important;
+  }
+  .dq-list{
+   list-style:none;
+   margin:0;
+   padding:0;
+   display:flex;
+   flex-direction:column;
+   gap:8px;
+  }
+  .dq-item{
+   display:flex;
+   align-items:center;
+   gap:12px;
+   padding:11px 14px;
+   border-radius:7px;
+   border:2px solid transparent;
+   font-size:clamp(17px,3.6vw,21px);
+   font-weight:900;
+   letter-spacing:1.5px;
+   cursor:pointer;
+   user-select:none;
+   transition:background .12s,border-color .12s,transform .1s;
+  }
+  .dq-item .dq-cursor{
+   display:inline-block;
+   width:22px;
+   color:#ffe66d;
+   opacity:0;
+   transform:translateX(-4px);
+  }
+  .dq-item.active{
+   background:rgba(255,255,255,.12);
+   border-color:#ffffff;
+   color:#ffe66d;
+  }
+  .dq-item.active .dq-cursor{
+   opacity:1;
+   transform:none;
+   animation:dqBlink .75s steps(2,end) infinite;
+  }
+  @keyframes dqBlink{50%{opacity:.35}}
+  .dq-item .dq-tag{
+   margin-left:auto;
+   font-size:11px;
+   padding:2px 8px;
+   border:1px solid #8fb4d8;
+   border-radius:4px;
+   color:#bfe3ff;
+   letter-spacing:0;
+  }
+  .dq-guide{
+   margin-top:14px;
+   padding-top:10px;
+   border-top:2px solid #ffffff55;
+   text-align:center;
+   font-size:13px;
+   color:#d8ecff;
+   letter-spacing:1.5px;
+  }
+  .dq-desc-box{
+   min-height:66px;
+   font-size:14px;
+   line-height:1.65;
+   color:#f2f8ff;
+  }
+  .dq-desc-box strong{color:#ffe66d}
+
+  /* 7. GHOST ARENA モーダル */
+  #ghostModal{
+   position:fixed;inset:0;z-index:10050;
+   background:rgba(5,12,24,.88);backdrop-filter:blur(6px);
+   display:none;align-items:center;justify-content:center;padding:14px;
+  }
+  .ghost-card{
+   width:min(760px,100%);max-height:90dvh;overflow-y:auto;
+   background:linear-gradient(180deg,#122940 0%,#0b1b2c 100%);
+   border:2px solid #59c8ee;border-radius:16px;padding:18px;
+   color:#f0f7ff;box-shadow:0 20px 50px rgba(0,0,0,.7);
+  }
+  .ghost-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0}
+  @media(max-width:680px){.ghost-grid{grid-template-columns:1fr}}
+  .ghost-box{background:#091827;border:1px solid #2c6a92;border-radius:12px;padding:12px}
+  .ghost-roster{display:grid;gap:8px;max-height:310px;overflow-y:auto;margin-top:8px}
+  .ghost-row{
+   display:flex;align-items:center;gap:10px;padding:9px 11px;
+   background:#10283f;border:1px solid #357ca6;border-radius:10px;
+  }
+  .ghost-row canvas{background:#183550;border-radius:8px;border:1px solid #4e9bc7;flex-shrink:0}
+  .ghost-meta{flex:1;min-width:0;font-size:12px;line-height:1.45}
+  .ghost-meta b{font-size:14px;color:#ffe47a;display:block}
+  .ghost-badge{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:#1f4e73;color:#bfe8ff;margin-right:4px}
+
+  /* 3. スマートフォン対応・全画面・約1.28倍拡大（はみ出し防止） */
+  #battle.sa-mobile-fs{
+   position:fixed!important;inset:0!important;z-index:9990!important;
+   width:100vw!important;height:100dvh!important;margin:0!important;padding:6px!important;
+   background:#061322!important;overflow-y:auto!important;
+  }
+  @media(max-width:768px){
+   #battle .titlebar{flex-wrap:wrap;gap:6px;padding:6px 8px;margin:4px}
+   #battle .titlebar h2{font-size:14px}
+   #battle .titlebar button,#battle .titlebar select{padding:6px 8px;min-height:32px;font-size:11px}
+   #battle .battlebox{width:100%!important;max-width:100vw!important;padding:6px!important;margin:4px auto!important;overflow:hidden!important}
+   #battle .arena{
+    width:100%!important;
+    height:min(58dvh,59vw)!important;
+    max-height:none!important;
+    aspect-ratio:auto!important;
+   }
+   #battle .help{font-size:11px;padding:6px;margin:6px 0 0}
+  }
+ `;
+ document.head.appendChild(patchStyle);
+
+ /* --------------------------------------------------------------------------
+    4. 効果音の強化（Web Audio API・外部ファイル不要・18種類 + UI音）
+    -------------------------------------------------------------------------- */
+ function ensureAudio(){
+  if(!soundOn)return null;
+  try{
+   audioCtx=audioCtx||new(window.AudioContext||window.webkitAudioContext)();
+   if(audioCtx.state==='suspended')audioCtx.resume();
+   return audioCtx;
+  }catch(e){return null;}
+ }
+ function tone(ctx,type,f0,f1,dur,gain=0.05,delay=0){
+  const t=ctx.currentTime+delay;
+  const o=ctx.createOscillator();
+  const g=ctx.createGain();
+  o.type=type;
+  o.frequency.setValueAtTime(Math.max(25,f0),t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(25,f1),t+dur);
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.linearRampToValueAtTime(gain,t+Math.min(0.012,dur*0.25));
+  g.gain.exponentialRampToValueAtTime(0.0008,t+dur);
+  o.connect(g);g.connect(ctx.destination);
+  o.start(t);o.stop(t+dur+0.01);
+ }
+ function noiseBurst(ctx,dur,freq,gain=0.045,delay=0){
+  const t=ctx.currentTime+delay;
+  const len=Math.max(1,Math.floor(ctx.sampleRate*dur));
+  const buf=ctx.createBuffer(1,len,ctx.sampleRate);
+  const data=buf.getChannelData(0);
+  for(let i=0;i<len;i++)data[i]=(Math.random()*2-1)*(1-i/len);
+  const src=ctx.createBufferSource();
+  const flt=ctx.createBiquadFilter();
+  const g=ctx.createGain();
+  src.buffer=buf;
+  flt.type='bandpass';flt.frequency.setValueAtTime(freq,t);
+  g.gain.setValueAtTime(gain,t);g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+  src.connect(flt);flt.connect(g);g.connect(ctx.destination);
+  src.start(t);src.stop(t+dur+0.01);
+ }
+
+ sfx=function(type){
+  const ctx=ensureAudio();
+  if(!ctx)return;
+  try{
+   switch(type){
+    case 'attack': case 'hit':
+     tone(ctx,'sawtooth',240,85,0.12,0.055);
+     noiseBurst(ctx,0.07,900,0.035);
+     break;
+    case 'heavy':
+     tone(ctx,'sawtooth',135,38,0.24,0.075);
+     tone(ctx,'triangle',95,32,0.26,0.06,0.02);
+     noiseBurst(ctx,0.14,420,0.05);
+     break;
+    case 'clash':
+     tone(ctx,'triangle',1180,420,0.16,0.055);
+     tone(ctx,'sine',1760,920,0.20,0.04,0.015);
+     break;
+    case 'guard':
+     tone(ctx,'square',320,140,0.10,0.045);
+     tone(ctx,'triangle',190,110,0.12,0.05);
+     break;
+    case 'break':
+     tone(ctx,'sawtooth',310,45,0.26,0.065);
+     noiseBurst(ctx,0.22,1200,0.06);
+     tone(ctx,'square',160,40,0.20,0.04,0.05);
+     break;
+    case 'restore':
+     tone(ctx,'sine',440,660,0.11,0.05,0);
+     tone(ctx,'sine',660,880,0.11,0.05,0.08);
+     tone(ctx,'triangle',880,1320,0.18,0.055,0.16);
+     break;
+    case 'heal':
+     tone(ctx,'sine',523,784,0.15,0.045,0);
+     tone(ctx,'sine',659,1046,0.20,0.045,0.07);
+     break;
+    case 'superjump':
+     tone(ctx,'triangle',210,880,0.26,0.055);
+     tone(ctx,'sine',320,1180,0.22,0.035,0.04);
+     break;
+    case 'gun':
+     tone(ctx,'square',920,160,0.08,0.045);
+     noiseBurst(ctx,0.06,2200,0.04);
+     break;
+    case 'warp':
+     tone(ctx,'sine',340,1280,0.14,0.045,0);
+     tone(ctx,'sawtooth',1280,420,0.16,0.04,0.10);
+     break;
+    case 'swap':
+     tone(ctx,'triangle',420,840,0.10,0.045,0);
+     tone(ctx,'triangle',840,420,0.11,0.045,0.09);
+     break;
+    case 'stun':
+     tone(ctx,'sine',480,320,0.09,0.045,0);
+     tone(ctx,'sine',520,300,0.09,0.045,0.09);
+     tone(ctx,'sine',460,260,0.10,0.045,0.18);
+     break;
+    case 'wind':
+     noiseBurst(ctx,0.26,520,0.045);
+     tone(ctx,'triangle',240,560,0.24,0.03);
+     break;
+    case 'warning':
+     tone(ctx,'square',740,560,0.10,0.045,0);
+     tone(ctx,'square',740,560,0.10,0.045,0.14);
+     break;
+    case 'attach':
+     tone(ctx,'sine',480,760,0.08,0.045);
+     tone(ctx,'triangle',760,960,0.06,0.035,0.04);
+     break;
+    case 'detach':
+     tone(ctx,'triangle',520,210,0.11,0.045);
+     break;
+    case 'victory':
+     tone(ctx,'triangle',523,523,0.11,0.055,0);
+     tone(ctx,'triangle',659,659,0.11,0.055,0.11);
+     tone(ctx,'triangle',784,784,0.11,0.055,0.22);
+     tone(ctx,'triangle',1046,1174,0.32,0.065,0.33);
+     break;
+    case 'defeat':
+     tone(ctx,'sawtooth',349,330,0.16,0.045,0);
+     tone(ctx,'sawtooth',311,293,0.16,0.045,0.16);
+     tone(ctx,'sawtooth',261,130,0.34,0.05,0.32);
+     break;
+    case 'cursor':
+     tone(ctx,'square',660,740,0.045,0.035);
+     break;
+    case 'decide':
+     tone(ctx,'square',587,880,0.06,0.04,0);
+     tone(ctx,'square',880,1174,0.10,0.045,0.055);
+     break;
+    default:
+     tone(ctx,'sine',620,880,0.07,0.03);
+   }
+  }catch(e){}
+ };
+
+ /* --------------------------------------------------------------------------
+    1. キャラクター見た目改善（カラー統一・全頭飾り描画・暗色時コントラスト自動調整）
+    -------------------------------------------------------------------------- */
+ function isDarkHex(hex){
+  const m=String(hex||'').trim().match(/^#?([0-9a-f]{6})$/i);
+  if(!m)return false;
+  const n=parseInt(m[1],16);
+  const r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  return (0.299*r+0.587*g+0.114*b)<118;
+ }
+
+ function drawOrnamentVector(c,dec,ink){
+  const kind=dec||orn||'moon';
+  c.save();
+  c.translate(4,-66);
+  c.lineJoin='round';c.lineCap='round';
+  c.strokeStyle=ink;c.lineWidth=2.4;
+  if(kind==='moon'){
+   c.fillStyle='#ffd75b';
+   c.beginPath();
+   c.arc(0,0,13,0.45,Math.PI*1.65);
+   c.quadraticCurveTo(-3,-2,0,11.5);
+   c.closePath();c.fill();c.stroke();
+  }else if(kind==='star'){
+   c.fillStyle='#ffe259';
+   c.beginPath();
+   for(let i=0;i<10;i++){
+    const r=i%2===0?14:6,a=-Math.PI/2+i*Math.PI/5;
+    if(i===0)c.moveTo(Math.cos(a)*r,Math.sin(a)*r);
+    else c.lineTo(Math.cos(a)*r,Math.sin(a)*r);
+   }
+   c.closePath();c.fill();c.stroke();
+  }else if(kind==='heart'){
+   c.fillStyle='#ff6b93';
+   c.beginPath();
+   c.moveTo(0,11);
+   c.bezierCurveTo(-16,1,-15,-12,-5,-12);
+   c.bezierCurveTo(-1,-12,0,-7,0,-5);
+   c.bezierCurveTo(0,-7,1,-12,5,-12);
+   c.bezierCurveTo(15,-12,16,1,0,11);
+   c.closePath();c.fill();c.stroke();
+  }else if(kind==='leaf'){
+   c.fillStyle='#6be38a';
+   c.beginPath();
+   c.moveTo(0,11);c.quadraticCurveTo(-14,0,-6,-13);
+   c.quadraticCurveTo(6,-12,11,2);c.quadraticCurveTo(5,10,0,11);
+   c.closePath();c.fill();c.stroke();
+   c.beginPath();c.moveTo(-2,8);c.lineTo(4,-6);c.stroke();
+  }else if(kind==='diamond'){
+   c.fillStyle='#6be4ff';
+   c.beginPath();
+   c.moveTo(0,-14);c.lineTo(11,0);c.lineTo(0,14);c.lineTo(-11,0);
+   c.closePath();c.fill();c.stroke();
+  }else if(kind==='sun'){
+   c.fillStyle='#ffb84d';
+   c.beginPath();c.arc(0,0,8.5,0,Math.PI*2);c.fill();c.stroke();
+   for(let i=0;i<8;i++){
+    const a=i*Math.PI/4;
+    c.beginPath();c.moveTo(Math.cos(a)*11,Math.sin(a)*11);c.lineTo(Math.cos(a)*15,Math.sin(a)*15);c.stroke();
+   }
+  }else if(kind==='flame'){
+   c.fillStyle='#ff7448';
+   c.beginPath();
+   c.moveTo(0,-15);
+   c.quadraticCurveTo(14,-3,9,10);
+   c.quadraticCurveTo(0,15,-9,10);
+   c.quadraticCurveTo(-14,-2,0,-15);
+   c.closePath();c.fill();c.stroke();
+   c.fillStyle='#ffe375';
+   c.beginPath();c.arc(0,4,4.5,0,Math.PI*2);c.fill();
+  }else if(kind==='cloud'){
+   c.fillStyle='#eef8ff';
+   c.beginPath();
+   c.arc(-6,3,6.5,0,Math.PI*2);
+   c.arc(2,0,8,0,Math.PI*2);
+   c.arc(9,4,6,0,Math.PI*2);
+   c.fill();c.stroke();
+  }
+  c.restore();
+ }
+
+ sprite=function(c,x,y,size,fill,dec){
+  const bodyCol=fill||color||'#ffffff';
+  const dark=isDarkHex(bodyCol);
+  const ink=dark?'#f4f8ff':'#102e53';
+  const faceInk=dark?'#ffffff':'#102e53';
+
+  c.save();
+  c.translate(x,y);
+  const k=size/118;
+  c.scale(k,k);
+  c.lineJoin='round';
+  c.lineCap='round';
+
+  // 本体シルエット（選択カラー反映＋暗色時は明るい輪郭線に自動調整）
+  c.fillStyle=bodyCol;
+  c.strokeStyle=ink;
+  c.lineWidth=dark?3.4:2.8;
+  c.beginPath();
+  c.moveTo(-53,34);
+  c.quadraticCurveTo(-57,31,-54,22);
+  c.lineTo(-44,-23);
+  c.quadraticCurveTo(-56,-28,-55,-39);
+  c.quadraticCurveTo(-54,-52,-42,-55);
+  c.quadraticCurveTo(-30,-58,-22,-46);
+  c.quadraticCurveTo(-12,-54,0,-54);
+  c.quadraticCurveTo(12,-54,22,-46);
+  c.quadraticCurveTo(30,-58,42,-55);
+  c.quadraticCurveTo(54,-52,55,-39);
+  c.quadraticCurveTo(56,-28,44,-23);
+  c.lineTo(54,22);
+  c.quadraticCurveTo(57,31,53,34);
+  c.quadraticCurveTo(31,53,0,54);
+  c.quadraticCurveTo(-31,53,-53,34);
+  c.closePath();
+  c.fill();
+  c.stroke();
+
+  if(dark){
+   c.save();
+   c.strokeStyle='rgba(170,215,255,0.45)';
+   c.lineWidth=1.5;
+   c.stroke();
+   c.restore();
+  }
+
+  // 頭飾り（全画面共通反映）
+  drawOrnamentVector(c,dec||orn,ink);
+
+  // 表情（暗色ボディ時は白ベースで視認性を確保）
+  c.fillStyle=faceInk;
+  c.strokeStyle=faceInk;
+  c.beginPath();
+  c.arc(-16,-10,3.3,0,Math.PI*2);
+  c.arc(16,-10,3.3,0,Math.PI*2);
+  c.fill();
+  c.beginPath();
+  c.ellipse(0,-1,3.5,2.3,0,0,Math.PI*2);
+  c.fill();
+  c.lineWidth=2.2;
+  c.beginPath();
+  c.moveTo(0,1);c.lineTo(0,7);
+  c.moveTo(0,7);c.quadraticCurveTo(-3.5,10,-6.5,8);
+  c.moveTo(0,7);c.quadraticCurveTo(3.5,10,6.5,8);
+  c.stroke();
+
+  c.restore();
+ };
+
+ /* --------------------------------------------------------------------------
+    5. ランダムステージ（全25種・トーナメント各戦・オンライン同期・ログ表示）
+    -------------------------------------------------------------------------- */
+ const origRenderStages=renderStages;
+ renderStages=function(){
+  origRenderStages();
+  const grid=$('stageGrid');
+  if(!grid||$('stageRandomPick'))return;
+  const rndBtn=document.createElement('button');
+  rndBtn.id='stageRandomPick';
+  rndBtn.className='stage-pick'+(randomStageMode?' sel':'');
+  rndBtn.style.cssText='--stage-sky:#3b2d71;--stage-ground:#1b4f72';
+  rndBtn.innerHTML='<span class="stage-preview">🎲</span>ランダムステージ<small>全25ステージから毎回ランダム選択</small>';
+  rndBtn.onclick=()=>{
+   randomStageMode=true;
+   stageKey=pickRandomStage();
+   sfx('decide');
+   renderStages();
+  };
+  grid.prepend(rndBtn);
+  grid.querySelectorAll('[data-stage]').forEach(btn=>{
+   btn.classList.toggle('sel',!randomStageMode&&btn.dataset.stage===stageKey);
+   btn.addEventListener('click',()=>{randomStageMode=false;});
+  });
+ };
+
+ /* --------------------------------------------------------------------------
+    2. 装備復元アイテム & 足場ステージでのスーパージャンプ出現禁止
+    -------------------------------------------------------------------------- */
+ function stageHasPlatforms(b){
+  if(!b)return false;
+  if((stages[b.stage]?.layout||0)!==0)return true;
+  return (b.terrain||[]).some(o=>o&&!o.broken&&(o.type==='platform'||o.type==='bridge'||o.type==='moving'||o.isPlatform));
+ }
+
+ function stepRestoreAndCustomPickups(b){
+  if(!b||b.finished)return;
+  if(b.powerup&&b.powerup.kind==='superjump'&&stageHasPlatforms(b)){
+   b.powerup.kind='restore';
+  }
+  if(!b.powerup)return;
+  for(const f of [b.a,b.b]){
+   if(Math.hypot(f.x-b.powerup.x,f.y-b.powerup.y)<72){
+    const kind=b.powerup.kind;
+    const other=f===b.a?b.b:b.a;
+    if(kind==='restore'){
+     for(const it of f.items){it.hp=it.maxHp;}
+     const maxHp=f.maxHp||100;
+     f.hp=Math.min(maxHp,f.hp+12);
+     b.effects.push({x:f.x,y:f.y-102,text:'装備復元！HP+12',t:1.0});
+     for(let j=0;j<14;j++){
+      const ang=Math.PI*2*j/14,sp=70+Math.random()*130;
+      b.particles.push({x:f.x,y:f.y-25,vx:Math.cos(ang)*sp,vy:Math.sin(ang)*sp,t:0.55,color:'#6ef7b2'});
+     }
+     sfx('restore');
+     b.powerup=null;
+     return;
+    }else if(kind==='heal'){
+     const maxHp=f.maxHp||100;
+     f.hp=Math.min(maxHp,f.hp+24);
+     b.effects.push({x:f.x,y:f.y-100,text:'HP回復！',t:.85});
+     sfx('heal');
+     b.powerup=null;
+     return;
+    }else if(kind==='superjump'){
+     f.vy=-475;f.windCooldown=2.5;
+     b.effects.push({x:f.x,y:f.y-100,text:'スーパージャンプ！',t:.85});
+     sfx('superjump');
+     b.powerup=null;
+     return;
+    }else if(kind==='swap'){
+     const tmp=f.x;f.x=other.x;other.x=tmp;f.vx*=-1;other.vx*=-1;
+     b.effects.push({x:f.x,y:f.y-100,text:'位置交換！',t:.85});
+     sfx('swap');
+     b.powerup=null;
+     return;
+    }else if(kind==='shock'){
+     other.vx+=(other.x>f.x?1:-1)*350;other.vy=-210;damage(other,7);
+     b.effects.push({x:f.x,y:f.y-100,text:'衝撃波！',t:.85});
+     sfx('heavy');
+     b.powerup=null;
+     return;
+    }
+   }
+  }
+ }
+
+ /* --------------------------------------------------------------------------
+    3 & 6. スマホ全画面切替ボタン ＋ トレーニングCPU方針＆練習リセット
+    -------------------------------------------------------------------------- */
+ function enterBattleFullscreen(){
+  const el=$('battle');
+  if(!el)return;
+  el.classList.add('sa-mobile-fs');
+  const req=el.requestFullscreen||el.webkitRequestFullscreen;
+  if(req&&!document.fullscreenElement){
+   try{const p=req.call(el);if(p&&p.catch)p.catch(()=>{});}catch(e){}
+  }
+  if($('arenaFullscreen'))$('arenaFullscreen').textContent='⤢ 全画面解除';
+ }
+ function exitBattleFullscreen(){
+  const el=$('battle');
+  if(el)el.classList.remove('sa-mobile-fs');
+  if(document.fullscreenElement){
+   const ex=document.exitFullscreen||document.webkitExitFullscreen;
+   if(ex){try{ex.call(document);}catch(e){}}
+  }
+  if($('arenaFullscreen'))$('arenaFullscreen').textContent='⛶ 全画面';
+ }
+ document.addEventListener('fullscreenchange',()=>{
+  const active=!!document.fullscreenElement||$('battle')?.classList.contains('sa-mobile-fs');
+  if($('arenaFullscreen'))$('arenaFullscreen').textContent=active?'⤢ 全画面解除':'⛶ 全画面';
+ });
+
+ function resetTrainingSession(){
+  if(!battle||gameMode!=='training')return;
+  const pItems=(builds[buildIndex]||[]).map(it=>{
+   const bonus=(upgrades[it.type]||0)*5;
+   const mhp=(defs[it.type]?.hp||24)+bonus;
+   return {...it,hp:mhp,maxHp:mhp,cool:0,terrainCool:0};
+  });
+  const eItems=cpuItems('adaptive',battle.level||0).map(it=>({...it,hp:it.maxHp,cool:0,terrainCool:0}));
+  battle.a.x=160;battle.a.y=290;battle.a.vx=0;battle.a.vy=0;
+  battle.a.hp=battle.a.maxHp||100;battle.a.items=pItems;
+  battle.a.cool=0;battle.a.stun=0;battle.a.stunMeter=0;battle.a.clashCool=0;
+  battle.a.onPlatform=null;battle.a.hurtGlow=0;battle.a.hurtJolt=0;
+  battle.a.stats={damage:0,hits:0,clashes:0,stuns:0,broken:0};
+
+  battle.b.x=800;battle.b.y=290;battle.b.vx=0;battle.b.vy=0;
+  battle.b.hp=battle.b.maxHp||100;battle.b.items=eItems;
+  battle.b.cool=0;battle.b.stun=0;battle.b.stunMeter=0;battle.b.clashCool=0;
+  battle.b.onPlatform=null;battle.b.hurtGlow=0;battle.b.hurtJolt=0;
+  battle.b.stats={damage:0,hits:0,clashes:0,stuns:0,broken:0};
+  applyTrainingAiStyle(battle.b);
+
+  battle.time=0;
+  battle.powerup=null;
+  battle.nextPowerup=5;
+  battle.powerupCount=0;
+  battle.bullets=[];
+  battle.effects=[];
+  battle.particles=[];
+  battle.hitBursts=[];
+  battle.warning=null;
+  battle.event=null;
+  initTerrain(battle);
+  if(battle.camera){
+   battle.camera.shake=0;battle.camera.flash=0;battle.camera.slow=0;
+   battle.camera.x=480;battle.camera.y=220;battle.camera.scale=1.25;
+  }
+  const stName=stages[battle.stage]?.name||battle.stage;
+  $('battlelog').textContent='トレーニング（リセット完了） ／ ステージ：'+stName;
+  sfx('restore');
+ }
+
+ function applyTrainingAiStyle(fighter){
+  if(!fighter)return;
+  if(trainingStyle==='offense'){
+   fighter.aiStyle='rush';
+  }else if(trainingStyle==='defense'){
+   fighter.aiStyle='guard';
+  }else{
+   fighter.aiStyle='counter';
+  }
+  fighter.aiSwitchAt=Number.POSITIVE_INFINITY;
+ }
+
+ (function setupBattleBarControls(){
+  const bar=$('battle')?.querySelector('.titlebar');
+  if(!bar||$('arenaFullscreen'))return;
+  const fsBtn=document.createElement('button');
+  fsBtn.id='arenaFullscreen';
+  fsBtn.type='button';
+  fsBtn.textContent='⛶ 全画面';
+  fsBtn.onclick=()=>{
+   const active=!!document.fullscreenElement||$('battle')?.classList.contains('sa-mobile-fs');
+   if(active)exitBattleFullscreen();
+   else enterBattleFullscreen();
+  };
+  bar.appendChild(fsBtn);
+
+  const trWrap=document.createElement('span');
+  trWrap.id='trainingBarControls';
+  trWrap.style.cssText='display:none;align-items:center;gap:6px;flex-wrap:wrap';
+  trWrap.innerHTML=`
+   <label style="font-size:12px;display:inline-flex;align-items:center;gap:4px">CPU方針
+    <select id="trainingAiSelect" style="background:#102b44;border:1px solid #4fb4e8;border-radius:6px;padding:4px 6px">
+     <option value="balanced">バランス型</option>
+     <option value="offense">攻撃重視</option>
+     <option value="defense">防御重視</option>
+    </select>
+   </label>
+   <button type="button" id="trainingResetBtn">練習をリセット</button>
+  `;
+  bar.appendChild(trWrap);
+  $('trainingAiSelect').value=trainingStyle;
+  $('trainingAiSelect').onchange=e=>{
+   trainingStyle=e.target.value;
+   if(battle?.b&&gameMode==='training')applyTrainingAiStyle(battle.b);
+   sfx('cursor');
+  };
+  $('trainingResetBtn').onclick=resetTrainingSession;
+ })();
+
+ /* --------------------------------------------------------------------------
+    18種効果音のゲームイベント連動フック
+    -------------------------------------------------------------------------- */
+ const origHit=hit;
+ hit=function(att,def,it,shield){
+  const beforeHp=def.hp;
+  origHit(att,def,it,shield);
+  const dealt=beforeHp-def.hp;
+  if(shield){
+   sfx('guard');
+  }else if(it.type==='hammer'||it.type==='blade'||dealt>=16){
+   sfx('heavy');
+  }else{
+   sfx('attack');
+  }
+ };
+
+ const origClashWeapons=clashWeapons;
+ clashWeapons=function(b,dt){
+  const prevCool=b.a.clashCool;
+  origClashWeapons(b,dt);
+  if(prevCool<=0&&b.a.clashCool>0)sfx('clash');
+ };
+
+ const origApplyStun=applyStun;
+ applyStun=function(f,amount){
+  const wasStunned=(f.stun||0)>0;
+  origApplyStun(f,amount);
+  if(!wasStunned&&(f.stun||0)>0)sfx('stun');
+ };
+
+ const origDestroy=destroy;
+ destroy=function(f,it){
+  origDestroy(f,it);
+  sfx('break');
+ };
+
+ const origFinish=finish;
+ finish=function(){
+  const win=battle&&battle.a.hp>battle.b.hp;
+  origFinish();
+  sfx(win?'victory':'defeat');
+  exitBattleFullscreen();
+ };
+
+ // 装備取り付け・取り外し効果音
+ $('editor')?.addEventListener('pointerdown',()=>{
+  setTimeout(()=>{if(selected)sfx('attach');},0);
+ });
+ $('remove')?.addEventListener('click',()=>sfx('detach'));
+ $('clear')?.addEventListener('click',()=>{if(!resetArmed)sfx('detach');});
+
+ /* --------------------------------------------------------------------------
+    バトル開始・更新・描画の統合フック（ランダムステージ・装備復元・オンライン同期）
+    -------------------------------------------------------------------------- */
+ const origStartBattle=startBattle;
+ startBattle=function(kind='adaptive',continuation=false){
+  if(gameMode==='tournament'||randomStageMode||gameMode==='ghost'){
+   stageKey=pickRandomStage();
+  }else if(gameMode==='online'&&onlineSession?.isHost){
+   stageKey=pickRandomStage();
+   if(onlineDb&&onlineSession.code){
+    onlineDb.ref('rooms/'+onlineSession.code).update({stage:stageKey}).catch(()=>{});
+   }
+  }
+  origStartBattle(kind,continuation);
+
+  if(battle){
+   if(gameMode==='training'&&battle.b){
+    applyTrainingAiStyle(battle.b);
+   }
+   if(gameMode==='ghost'&&ghostOpponent&&battle.b){
+    battle.b.items=(ghostOpponent.items||[]).map(it=>{
+     const mhp=Number(it.maxHp)||defs[it.type]?.hp||24;
+     return {...it,hp:mhp,maxHp:mhp,cool:0,terrainCool:0};
+    });
+    battle.b.color=ghostOpponent.color||'#ffc1c8';
+    battle.b.orn=ghostOpponent.orn||'star';
+    const gStyle=ghostOpponent.aiStyle||'balanced';
+    battle.b.aiStyle=gStyle==='offense'?'rush':gStyle==='defense'?'guard':'counter';
+    battle.b.aiSwitchAt=Number.POSITIVE_INFINITY;
+   }
+   const stageName=stages[battle.stage]?.name||battle.stage;
+   const prefix=gameMode==='ghost'&&ghostOpponent?`GHOST対戦 vs ${ghostOpponent.name} ／ `:'';
+   if($('battlelog')){
+    $('battlelog').textContent=prefix+$('battlelog').textContent+' ／ ステージ：'+stageName;
+   }
+  }
+  if(isMobile())enterBattleFullscreen();
+ };
+
+ const origUpdate=update;
+ update=function(dt){
+  const b=battle;
+  const hadWarning=!!b?.warning;
+  const prevPowerupCount=b?.powerupCount||0;
+  const prevBullets=b?.bullets?.length||0;
+  const prevWarpA=b?.a?.warpCooldown||0;
+  const prevWarpB=b?.b?.warpCooldown||0;
+  const prevWindA=b?.a?.windCooldown||0;
+  const prevWindB=b?.b?.windCooldown||0;
+
+  if(b){
+   stepRestoreAndCustomPickups(b);
+  }
+  origUpdate(dt);
+
+  if(!b)return;
+  if(!hadWarning&&b.warning)sfx('warning');
+  if((b.bullets?.length||0)>prevBullets)sfx('gun');
+  if((b.a?.warpCooldown||0)>prevWarpA||(b.b?.warpCooldown||0)>prevWarpB)sfx('warp');
+  if((b.a?.windCooldown||0)>prevWindA||(b.b?.windCooldown||0)>prevWindB)sfx('wind');
+
+  if(b.powerupCount>prevPowerupCount&&b.powerup){
+   const pool=stageHasPlatforms(b)?['swap','heal','shock','restore']:['swap','superjump','heal','shock','restore'];
+   b.powerup.kind=pool[(b.powerupCount-1)%pool.length];
+  }
+ };
+
+ // 装備復元アイテムのオーブ描画
+ const origDrawBattleFn=drawBattle;
+ drawBattle=function(){
+  origDrawBattleFn();
+  const b=battle;
+  const arena=$('arena');
+  if(!b||!arena)return;
+  if(b.powerup&&b.powerup.kind==='restore'){
+   const c=arena.getContext('2d');
+   const cam=b.camera||{x:480,y:220,scale:1.25};
+   c.save();
+   c.translate(480,220);c.scale(cam.scale,cam.scale);c.translate(-cam.x,-cam.y);
+   const p=b.powerup,py=p.y+Math.sin(b.time*5)*8;
+   c.translate(p.x,py);
+   c.fillStyle='#59e8a5';
+   c.strokeStyle='#0c3b28';
+   c.lineWidth=3;
+   c.beginPath();c.arc(0,0,26,0,Math.PI*2);c.fill();c.stroke();
+   c.fillStyle='#09281b';
+   c.font='bold 13px system-ui';
+   c.textAlign='center';c.textBaseline='middle';
+   c.fillText('復元',0,1);
+   c.restore();
+  }
+ };
+
+ // オンライン対戦：ホストとゲストのステージ同期
+ if(typeof onlineDb!=='undefined'){
+  setInterval(()=>{
+   if(gameMode==='online'&&onlineSession&&!onlineSession.isHost&&onlineDb&&onlineSession.code&&battle){
+    onlineDb.ref('rooms/'+onlineSession.code+'/stage').get().then(snap=>{
+     const st=snap.val();
+     if(st&&stages[st]&&battle.stage!==st){
+      battle.stage=st;
+      initTerrain(battle);
+      if($('battlelog')){
+       $('battlelog').textContent='オンライン対戦 ／ ステージ：'+stages[st].name;
+      }
+     }
+    }).catch(()=>{});
+   }
+  },1200);
+ }
+
+ /* --------------------------------------------------------------------------
+    7. GHOST ARENA（オンライン＆ローカル登録・一覧選択・公式ライバル常設）
+    -------------------------------------------------------------------------- */
+ MODES.ghost='GHOST ARENA';
+ const GHOST_LOCAL_KEY='sleep_arena_ghosts_v2';
+ const OFFICIAL_RIVALS=[
+  {
+   id:'official-paladin',name:'【公式】白銀の守護騎士',author:'OFFICIAL RIVAL',color:'#d5e2e8',orn:'shield' in defs?'diamond':'star',aiStyle:'defense',
+   items:[
+    {id:1,type:'shield',parent:'body',x:64,y:-8,angle:0,hp:36,maxHp:36},
+    {id:2,type:'shield',parent:'body',x:52,y:38,angle:35,hp:36,maxHp:36},
+    {id:3,type:'sword',parent:'body',x:58,y:-36,angle:-25,hp:24,maxHp:24},
+    {id:4,type:'weight',parent:'body',x:-56,y:25,angle:155,hp:42,maxHp:42}
+   ]
+  },
+  {
+   id:'official-berserker',name:'【公式】紅蓮の重撃王',author:'OFFICIAL RIVAL',color:'#f5a09e',orn:'flame',aiStyle:'offense',
+   items:[
+    {id:1,type:'hammer',parent:'body',x:64,y:-10,angle:-5,hp:27,maxHp:27},
+    {id:2,type:'blade',parent:'body',x:54,y:34,angle:28,hp:22,maxHp:22},
+    {id:3,type:'connector',parent:'body',x:45,y:-46,angle:-45,hp:17,maxHp:17},
+    {id:4,type:'hammer',parent:3,x:75,y:-76,angle:-30,hp:27,maxHp:27}
+   ]
+  },
+  {
+   id:'official-sniper',name:'【公式】蒼穹の狙撃羊',author:'OFFICIAL RIVAL',color:'#8bd0fa',orn:'moon',aiStyle:'balanced',
+   items:[
+    {id:1,type:'gun',parent:'body',x:62,y:-24,angle:-12,hp:20,maxHp:20},
+    {id:2,type:'gun',parent:'body',x:62,y:20,angle:10,hp:20,maxHp:20},
+    {id:3,type:'shield',parent:'body',x:56,y:0,angle:0,hp:36,maxHp:36}
+   ]
+  }
+ ];
+
+ let remoteGhostsCache=[];
+
+ function loadLocalGhosts(){
+  try{
+   const arr=JSON.parse(localStorage.getItem(GHOST_LOCAL_KEY)||'[]');
+   return Array.isArray(arr)?arr:[];
+  }catch(e){return [];}
+ }
+ function saveLocalGhosts(list){
+  try{localStorage.setItem(GHOST_LOCAL_KEY,JSON.stringify(list.slice(0,40)));}catch(e){}
+ }
+
+ function ensureGhostModal(){
+  if($('ghostModal'))return;
+  const modal=document.createElement('div');
+  modal.id='ghostModal';
+  modal.innerHTML=`
+   <div class="ghost-card">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #357ca6;padding-bottom:10px">
+     <h2 style="margin:0;font-size:21px">👻 GHOST ARENA（非同期ゴースト対戦）</h2>
+     <button type="button" id="ghostCloseBtn">閉じる</button>
+    </div>
+    <div class="ghost-grid">
+     <div class="ghost-box">
+      <h3 style="margin:0 0 8px;font-size:15px;color:#ffe47a">自分のBUILDをゴースト登録</h3>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+       <canvas id="myGhostPreview" width="84" height="84" style="background:#17344f;border-radius:10px;border:1px solid #4e9bc7"></canvas>
+       <div style="font-size:12px;line-height:1.6">
+        <div>使用中: <b>BUILD <span id="ghostBuildNum">1</span></b>（<span id="ghostPartCount">0</span>パーツ）</div>
+        <div>カラー・頭飾り・強化Lvを自動保存</div>
+       </div>
+      </div>
+      <label style="display:block;font-size:12px;margin-bottom:6px">ゴースト名
+       <input id="ghostNameInput" type="text" maxlength="18" placeholder="例：スリープチャンプ" style="width:100%;padding:7px;margin-top:3px;background:#102940;color:#fff;border:1px solid #4a90b8;border-radius:6px">
+      </label>
+      <label style="display:block;font-size:12px;margin-bottom:10px">CPU行動方針
+       <select id="ghostAiPolicy" style="width:100%;padding:7px;margin-top:3px;background:#102940;color:#fff;border:1px solid #4a90b8;border-radius:6px">
+        <option value="balanced">バランス型</option>
+        <option value="offense">攻撃重視</option>
+        <option value="defense">防御重視</option>
+       </select>
+      </label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+       <button type="button" id="ghostRegisterBtn" style="flex:1;background:#186c9c">📤 現在のBUILDを登録</button>
+       <button type="button" id="ghostRefreshBtn">🔄 一覧更新</button>
+      </div>
+      <p id="ghostStatusMsg" role="status" style="margin:8px 0 0;font-size:12px;color:#bde6ff;line-height:1.5">オンライン＆ローカル保存に対応。未登録でも公式ライバルと対戦できます。</p>
+     </div>
+     <div class="ghost-box">
+      <h3 style="margin:0 0 4px;font-size:15px;color:#8ef5c2">対戦するゴーストを選択</h3>
+      <div style="font-size:11px;color:#a9cde3">オンライン登録・端末保存・公式ライバルから選んで対戦</div>
+      <div id="ghostRosterList" class="ghost-roster"></div>
+     </div>
+    </div>
+   </div>
+  `;
+  document.body.appendChild(modal);
+  $('ghostCloseBtn').onclick=()=>{modal.style.display='none';};
+  $('ghostRegisterBtn').onclick=registerMyGhost;
+  $('ghostRefreshBtn').onclick=()=>refreshGhostRoster(true);
+ }
+
+ function drawMiniGhostSprite(canvas,gCol,gOrn){
+  if(!canvas)return;
+  const c=canvas.getContext('2d');
+  c.clearRect(0,0,canvas.width,canvas.height);
+  sprite(c,canvas.width/2,canvas.height/2+6,56,gCol||'#ffffff',gOrn||'moon');
+ }
+
+ function styleLabel(st){
+  return st==='offense'?'攻撃重視':st==='defense'?'防御重視':'バランス型';
+ }
+
+ function renderGhostRoster(){
+  const listEl=$('ghostRosterList');
+  if(!listEl)return;
+  const locals=loadLocalGhosts().map(g=>({...g,source:'ローカル保存'}));
+  const remotes=remoteGhostsCache.map(g=>({...g,source:'オンライン'}));
+  const officials=OFFICIAL_RIVALS.map(g=>({...g,source:'公式ライバル'}));
+  const merged=[...remotes,...locals,...officials];
+
+  listEl.innerHTML=merged.map((g,idx)=>{
+   const itemNames=(g.items||[]).map(it=>defs[it.type]?.name||it.type).join('・')||'素手';
+   return `
+    <div class="ghost-row">
+     <canvas data-ghost-cv="${idx}" width="58" height="58"></canvas>
+     <div class="ghost-meta">
+      <b>${g.name||'GHOST'}</b>
+      <span class="ghost-badge">${g.source}</span>
+      <span class="ghost-badge">${styleLabel(g.aiStyle)}</span>
+      <div style="color:#cfe6f7;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${itemNames}</div>
+     </div>
+     <button type="button" data-ghost-fight="${idx}" style="padding:7px 10px;font-size:12px;background:#8c3252">対戦</button>
+    </div>
+   `;
+  }).join('');
+
+  merged.forEach((g,idx)=>{
+   const cv=listEl.querySelector(`[data-ghost-cv="${idx}"]`);
+   drawMiniGhostSprite(cv,g.color,g.orn);
+   const btn=listEl.querySelector(`[data-ghost-fight="${idx}"]`);
+   if(btn){
+    btn.onclick=()=>{
+     ghostOpponent=g;
+     gameMode='ghost';
+     matchWins=[0,0];
+     matchRound=0;
+     $('ghostModal').style.display='none';
+     sfx('decide');
+     startBattle('adaptive');
+    };
+   }
+  });
+ }
+
+ async function refreshGhostRoster(showToast=false){
+  if(showToast&&$('ghostStatusMsg'))$('ghostStatusMsg').textContent='オンラインゴーストを取得中…';
+  try{
+   if(typeof connectFirebaseOnline==='function')await connectFirebaseOnline();
+   if(onlineDb){
+    const snap=await onlineDb.ref('ghosts').limitToLast(30).get();
+    const val=snap.val()||{};
+    remoteGhostsCache=Object.values(val)
+     .filter(g=>g&&Array.isArray(g.items)&&g.items.length>0)
+     .sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+    if(showToast&&$('ghostStatusMsg')){
+     $('ghostStatusMsg').textContent=`オンラインゴースト ${remoteGhostsCache.length}件を読み込みました。`;
+    }
+   }
+  }catch(e){
+   if(showToast&&$('ghostStatusMsg')){
+    $('ghostStatusMsg').textContent='オンライン取得に失敗しましたが、ローカル保存＆公式ライバルと対戦できます。';
+   }
+  }
+  renderGhostRoster();
+ }
+
+ async function registerMyGhost(){
+  const curItems=(builds[buildIndex]||[]).map(it=>{
+   const bonus=(upgrades[it.type]||0)*5;
+   const mhp=(defs[it.type]?.hp||24)+bonus;
+   return {id:it.id,type:it.type,parent:it.parent,x:it.x,y:it.y,angle:it.angle,hp:mhp,maxHp:mhp};
+  });
+  if(!curItems.length){
+   $('ghostStatusMsg').textContent='装備が0個です。「装備・BUILD」でパーツを配置してから登録してください。';
+   return;
+  }
+  const rawName=($('ghostNameInput')?.value||'').trim();
+  const gName=rawName||('GHOST-'+Math.random().toString(36).slice(2,6).toUpperCase());
+  const aiStyle=$('ghostAiPolicy')?.value||'balanced';
+  const gid='g_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+  const record={id:gid,name:gName,items:curItems,color,orn,aiStyle,createdAt:Date.now()};
+
+  const locals=loadLocalGhosts();
+  locals.unshift(record);
+  saveLocalGhosts(locals);
+  renderGhostRoster();
+  sfx('restore');
+  $('ghostStatusMsg').textContent=`「${gName}」をローカルに保存しました。Firebaseへ登録中…`;
+
+  try{
+   if(typeof connectFirebaseOnline==='function')await connectFirebaseOnline();
+   if(onlineDb){
+    const payload=typeof onlineFirebaseSafe==='function'
+     ?onlineFirebaseSafe({...record,uid:onlineUser?.uid||gid})
+     :{...record,uid:onlineUser?.uid||gid};
+    await onlineDb.ref('ghosts/'+gid).set(payload);
+    $('ghostStatusMsg').textContent=`「${gName}」をオンライン（Firebase）と端末の両方に登録しました！`;
+    await refreshGhostRoster(false);
+   }else{
+    $('ghostStatusMsg').textContent=`「${gName}」をローカル保存しました（オフラインモードでも対戦可能）。`;
+   }
+  }catch(e){
+   $('ghostStatusMsg').textContent=`ローカル保存完了！（オンライン登録はスキップ：${e?.message||'接続不可'}）`;
+  }
+ }
+
+ function openGhostArena(){
+  ensureGhostModal();
+  $('ghostBuildNum').textContent=String(buildIndex+1);
+  $('ghostPartCount').textContent=String((builds[buildIndex]||[]).length);
+  drawMiniGhostSprite($('myGhostPreview'),color,orn);
+  $('ghostModal').style.display='flex';
+  renderGhostRoster();
+  refreshGhostRoster(false);
+ }
+
+ /* --------------------------------------------------------------------------
+    8. ホーム画面をドラクエ風の選択式コマンドメニューへ刷新
+    -------------------------------------------------------------------------- */
+ const DQ_COMMANDS=[
+  {
+   label:'バトル',
+   tag:'BATTLE',
+   desc:'<strong>【バトル】</strong> 通常バトル・3本勝負・トーナメントなどの対戦モードを選択して戦います。',
+   action:()=>go('modes')
+  },
+  {
+   label:'装備・BUILD',
+   tag:'BUILD',
+   desc:'<strong>【装備・BUILD】</strong> 剣・盾・銃・接続パーツを自由に配置し、最大3つのオリジナル機体を編成します。',
+   action:()=>go('equip')
+  },
+  {
+   label:'トレーニング',
+   tag:'TRAIN',
+   desc:'<strong>【トレーニング】</strong> 倒れないCPUを相手に、行動方針（バランス・攻撃・防御）やリセット機能を使って練習します。',
+   action:()=>{gameMode='training';matchWins=[0,0];matchRound=0;go('stages');}
+  },
+  {
+   label:'GHOST ARENA',
+   tag:'GHOST',
+   desc:'<strong>【GHOST ARENA】</strong> 自分のBUILD・カラー・頭飾り・AI方針を登録し、他プレイヤーや公式ライバルのゴーストと非同期対戦します。',
+   action:()=>openGhostArena()
+  },
+  {
+   label:'オンライン対戦',
+   tag:'ONLINE',
+   desc:'<strong>【オンライン対戦】</strong> ルーム作成・参加やランダムマッチで、他プレイヤーとリアルタイム通信対戦を行います。',
+   action:()=>{if(typeof openOnlinePanel==='function')openOnlinePanel();}
+  },
+  {
+   label:'オプション',
+   tag:'OPTION',
+   desc:'<strong>【オプション】</strong> 羊キャラクターの本体カラー・頭の飾り・効果音（SE）のON/OFFを設定します。',
+   action:()=>go('options')
+  }
+ ];
+
+ function renderDqHomeMenu(){
+  const home=$('home');
+  if(!home)return;
+  // 重複しているホームのトーナメントボタン等を排除し、ドラクエ風コマンドウィンドウを構築
+  if($('homeTournament'))$('homeTournament').remove();
+  if($('homeOnline'))$('homeOnline').remove();
+  if($('homeGhost'))$('homeGhost').remove();
+
+  let wrap=home.querySelector('.dq-wrap');
+  if(!wrap){
+   wrap=document.createElement('div');
+   wrap.className='dq-wrap';
+   wrap.innerHTML=`
+    <div class="dq-window">
+     <div class="dq-header">
+      <div class="dq-title">SLEEP ARENA</div>
+      <button type="button" class="dq-back-btn" id="dqTitleBack">タイトルへ</button>
+     </div>
+     <ul class="dq-list" id="dqCommandList" role="listbox" aria-label="コマンド選択"></ul>
+     <div class="dq-guide">↑↓で選択 決定で進む</div>
+    </div>
+    <div class="dq-window dq-desc-box" id="dqDescBox"></div>
+   `;
+   home.appendChild(wrap);
+   $('dqTitleBack').onclick=()=>{sfx('cursor');go('title');};
+  }
+
+  const listEl=$('dqCommandList');
+  listEl.innerHTML=DQ_COMMANDS.map((cmd,i)=>`
+   <li class="dq-item ${i===dqIndex?'active':''}" data-dq-idx="${i}" role="option" aria-selected="${i===dqIndex}">
+    <span class="dq-cursor">▶</span>
+    <span>${cmd.label}</span>
+    <span class="dq-tag">${cmd.tag}</span>
+   </li>
+  `).join('');
+
+  $('dqDescBox').innerHTML=DQ_COMMANDS[dqIndex].desc;
+
+  listEl.querySelectorAll('.dq-item').forEach(el=>{
+   const idx=Number(el.dataset.dqIdx);
+   el.onmouseenter=()=>{
+    if(dqIndex!==idx){
+     dqIndex=idx;
+     sfx('cursor');
+     updateDqSelection();
+    }
+   };
+   el.onclick=()=>{
+    dqIndex=idx;
+    updateDqSelection();
+    sfx('decide');
+    DQ_COMMANDS[idx].action();
+   };
+  });
+ }
+
+ function updateDqSelection(){
+  const listEl=$('dqCommandList');
+  if(!listEl)return;
+  listEl.querySelectorAll('.dq-item').forEach((el,i)=>{
+   const active=i===dqIndex;
+   el.classList.toggle('active',active);
+   el.setAttribute('aria-selected',String(active));
+  });
+  if($('dqDescBox'))$('dqDescBox').innerHTML=DQ_COMMANDS[dqIndex].desc;
+ }
+
+ document.addEventListener('keydown',e=>{
+  if(screen!=='home')return;
+  if($('ghostModal')?.style.display==='flex')return;
+  if($('onlineOverlay')?.style.display==='flex')return;
+  if(e.key==='ArrowUp'||e.key==='w'||e.key==='W'){
+   e.preventDefault();
+   dqIndex=(dqIndex-1+DQ_COMMANDS.length)%DQ_COMMANDS.length;
+   sfx('cursor');
+   updateDqSelection();
+  }else if(e.key==='ArrowDown'||e.key==='s'||e.key==='S'){
+   e.preventDefault();
+   dqIndex=(dqIndex+1)%DQ_COMMANDS.length;
+   sfx('cursor');
+   updateDqSelection();
+  }else if(e.key==='Enter'||e.key===' '){
+   e.preventDefault();
+   sfx('decide');
+   DQ_COMMANDS[dqIndex].action();
+  }
+ });
+
+ const origGoHook=go;
+ go=function(next){
+  if(next!=='battle')exitBattleFullscreen();
+  origGoHook(next);
+  if(next==='home')renderDqHomeMenu();
+  if(next==='title')drawTitle();
+  if(next==='equip')renderEquip();
+  if(next==='options')renderOptions();
+  if($('trainingBarControls')){
+   $('trainingBarControls').style.display=(next==='battle'&&gameMode==='training')?'inline-flex':'none';
+  }
+ };
+
+ // 初期描画の反映
+ renderDqHomeMenu();
+ drawTitle();
+ renderEquip();
+ renderOptions();
 })();
 </script>
 </body></html>
