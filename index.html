@@ -2561,372 +2561,16 @@ window.addEventListener('beforeunload',()=>{if(onlineSession?.isHost&&onlineDb)o
 onlineUi();
 })();
 </script>
-
 <script>
-/* SLEEP ARENA v4.5: Mobile Edge-to-Edge Fullscreen, 18 SFX, Training Controls, Ghost Arena */
-(function(){
- const $=id=>document.getElementById(id);
- const stageKeys=Object.keys(stages||{});
- const pickRandomStage=()=>stageKeys[Math.floor(Math.random()*stageKeys.length)]||'grass';
- const isMobile=()=>matchMedia('(pointer: coarse)').matches||window.innerWidth<=820||/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
- let ghostOpponent=null,trainingStyle='balanced',fsOn=false;
-
- // 3. スマホ最適化＆全画面スタイル（エッジ・トゥ・エッジ対応）
- const mobileStyle=document.createElement('style');
- mobileStyle.textContent=`
-  #battle.mobile-battle-fs{position:fixed!important;inset:0!important;z-index:9500!important;background:#051423!important;padding:4px!important;display:flex!important;flex-direction:column!important;justify-content:center!important;overflow:hidden!important}
-  #battle.mobile-battle-fs .titlebar{margin:4px!important;padding:6px 10px!important}
-  #battle.mobile-battle-fs .battlebox{max-width:none!important;width:100%!important;flex:1!important;display:flex!important;flex-direction:column!important;justify-content:center!important;margin:0!important;padding:4px!important;border-radius:0!important}
-  #battle.mobile-battle-fs .arena{width:100%!important;max-height:calc(100dvh - 125px)!important;border-radius:0!important}
-  @media(pointer:coarse),(max-width:820px){
-   #battle .titlebar{flex-wrap:wrap;gap:6px}
-   #trainingControls{width:100%;justify-content:center}
-  }
- `;
- document.head.appendChild(mobileStyle);
-
- // 3 & 6. 全画面切替ボタン ＆ トレーニング専用コントロールバー（3タイプ選択 ＆ 完全リセット）
- const battleTitle=$('#battle .titlebar');
- if(battleTitle){
-   const fs=document.createElement('button');
-   fs.id='arenaFullscreen';
-   fs.textContent='⛶ 全画面';
-   battleTitle.appendChild(fs);
-   fs.onclick=()=>toggleFullscreen();
-
-   const styleWrap=document.createElement('span');
-   styleWrap.id='trainingControls';
-   styleWrap.style.cssText='display:none;gap:6px;align-items:center;flex-wrap:wrap';
-   styleWrap.innerHTML=`
-    <button type="button" class="tr-style-btn" data-tr-style="guard">🛡 防御中心</button>
-    <button type="button" class="tr-style-btn" data-tr-style="rush">⚔ 攻撃中心</button>
-    <button type="button" class="tr-style-btn" data-tr-style="counter">⚖ バランス</button>
-    <button type="button" id="trainingReset" style="background:#8f3d4c">↻ 完全リセット</button>
-   `;
-   battleTitle.appendChild(styleWrap);
-
-   const updateTrainingButtons=()=>{
-    document.querySelectorAll('.tr-style-btn').forEach(btn=>{
-     const active=btn.dataset.trStyle===trainingStyle;
-     btn.style.outline=active?'2px solid #ffd95a':'none';
-     btn.style.background=active?'#1c6b96':'';
-    });
-   };
-   document.querySelectorAll('.tr-style-btn').forEach(btn=>{
-    btn.onclick=()=>{
-     trainingStyle=btn.dataset.trStyle;
-     updateTrainingButtons();
-     if(gameMode==='training'&&battle?.b){
-      battle.b.aiStyle=trainingStyle;
-      battle.b.aiSwitchAt=Number.POSITIVE_INFINITY;
-      battle.effects.push({x:battle.b.x,y:battle.b.y-95,text:btn.textContent,t:.7});
-     }
-    };
-   });
-   updateTrainingButtons();
-
-   $('#trainingReset').onclick=()=>{
-    if(gameMode==='training'){
-     sfx('restore');
-     startBattle('adaptive');
-    }
-   };
- }
-
- function enterBattleFullscreen(){
-  const el=$('#battle');
-  if(!el)return;
-  el.classList.add('mobile-battle-fs');
-  fsOn=true;
-  if($('#arenaFullscreen'))$('#arenaFullscreen').textContent='⤢ 全画面解除';
-  if(!document.fullscreenElement){
-   const req=el.requestFullscreen||el.webkitRequestFullscreen;
-   if(req){try{const p=req.call(el);if(p&&p.catch)p.catch(()=>{});}catch(e){}}
-  }
- }
- function exitBattleFullscreen(){
-  const el=$('#battle');
-  if(el)el.classList.remove('mobile-battle-fs');
-  fsOn=false;
-  if($('#arenaFullscreen'))$('#arenaFullscreen').textContent='⛶ 全画面';
-  if(document.fullscreenElement){
-   const exit=document.exitFullscreen||document.webkitExitFullscreen;
-   if(exit){try{exit.call(document);}catch(e){}}
-  }
- }
- function toggleFullscreen(){
-  if(fsOn||document.fullscreenElement)exitBattleFullscreen();
-  else enterBattleFullscreen();
- }
- document.addEventListener('fullscreenchange',()=>{
-  const el=$('#battle');
-  const active=!!document.fullscreenElement||(el&&el.classList.contains('mobile-battle-fs'));
-  fsOn=active;
-  if($('#arenaFullscreen'))$('#arenaFullscreen').textContent=active?'⤢ 全画面解除':'⛶ 全画面';
- });
-
- const baseGo=go;
- go=function(next){
-   if(next!=='battle')exitBattleFullscreen();
-   baseGo(next);
-   if($('#trainingControls'))$('#trainingControls').style.display=next==='battle'&&gameMode==='training'?'inline-flex':'none';
- };
-
- const baseStartBattle=startBattle;
- startBattle=function(kind='adaptive',continuation=false){
-   if(gameMode==='tournament'||(gameMode==='online'&&onlineSession?.isHost)||(gameMode==='ghost'&&ghostOpponent)){
-     stageKey=pickRandomStage();
-   }
-   baseStartBattle(kind,continuation);
-   if(gameMode==='training'&&battle?.b){
-     battle.b.aiStyle=trainingStyle||'counter';
-     battle.b.aiSwitchAt=Number.POSITIVE_INFINITY;
-     battle.b.hp=Math.max(1,battle.b.hp);
-   }
-   if(gameMode==='ghost'&&ghostOpponent&&battle?.b){
-     const gItems=(ghostOpponent.items||[]).map(it=>({
-      ...it,
-      hp:Number(it.maxHp)||defs[it.type]?.hp||30,
-      maxHp:Number(it.maxHp)||defs[it.type]?.hp||30,
-      cool:0
-     }));
-     battle.b.items=gItems;
-     battle.b.initialItems=gItems.map(i=>({...i}));
-     battle.b.color=ghostOpponent.color||'#ffc1c8';
-     battle.b.orn=ghostOpponent.orn||'star';
-     battle.b.aiStyle=ghostOpponent.aiStyle==='offense'?'rush':ghostOpponent.aiStyle==='defense'?'guard':'counter';
-     battle.b.aiSwitchAt=Number.POSITIVE_INFINITY;
-   }
-   if(battle&&$('#battlelog')){
-     const stageName=stages[battle.stage]?.name||battle.stage;
-     const extraPrefix=gameMode==='ghost'&&ghostOpponent?('ゴースト対戦（vs '+ghostOpponent.name+'） ／ '):'';
-     if(extraPrefix&&!$('#battlelog').textContent.startsWith('ゴースト対戦')){
-      $('#battlelog').textContent=extraPrefix+$('#battlelog').textContent;
-     }
-     if(!$('#battlelog').textContent.includes('ステージ：')){
-      $('#battlelog').textContent+=' ／ ステージ：'+stageName;
-     }
-   }
-   if(isMobile())enterBattleFullscreen();
- };
-
- // 4. Web Audio API による18種類の合成SE
- sfx=function(type){
-   if(!soundOn)return;
-   const playTone=(f0,f1,wave,dur,gain,delay=0)=>{
-    const o=audioCtx.createOscillator(),g=audioCtx.createGain(),t=audioCtx.currentTime+delay;
-    o.type=wave;
-    o.frequency.setValueAtTime(f0,t);
-    o.frequency.exponentialRampToValueAtTime(Math.max(28,f1),t+dur);
-    g.gain.setValueAtTime(gain,t);
-    g.gain.exponentialRampToValueAtTime(.001,t+dur);
-    o.connect(g);g.connect(audioCtx.destination);
-    o.start(t);o.stop(t+dur);
-   };
-   const map={
-    tap:[[660,920,'sine',.07,.025]],
-    hit:[[210,78,'sawtooth',.12,.048]],
-    heavy:[[125,36,'sawtooth',.22,.065],[85,32,'triangle',.20,.05]],
-    clash:[[1120,340,'triangle',.14,.055],[1680,520,'sine',.11,.04]],
-    guard:[[460,210,'square',.09,.035]],
-    break:[[260,44,'sawtooth',.24,.06],[150,35,'square',.18,.045]],
-    restore:[[440,660,'sine',.14,.04,0],[660,990,'sine',.16,.045,.08],[990,1320,'triangle',.20,.045,.16]],
-    heal:[[520,780,'sine',.14,.04,0],[780,1040,'sine',.18,.04,.09]],
-    superjump:[[210,820,'triangle',.25,.045]],
-    gun:[[880,160,'square',.08,.038]],
-    warp:[[340,1480,'sawtooth',.16,.04,0],[1200,420,'sine',.16,.035,.12]],
-    swap:[[420,740,'triangle',.10,.035,0],[740,420,'triangle',.10,.035,.09]],
-    stun:[[190,110,'square',.12,.04,0],[160,90,'square',.14,.04,.1]],
-    wind:[[240,620,'triangle',.24,.032]],
-    warning:[[640,320,'square',.12,.04,0],[640,320,'square',.12,.04,.15]],
-    attach:[[520,780,'sine',.09,.032]],
-    detach:[[440,170,'triangle',.12,.035]],
-    victory:[[523,523,'sine',.12,.045,0],[659,659,'sine',.12,.045,.11],[784,784,'sine',.12,.045,.22],[1046,1046,'triangle',.32,.05,.33]],
-    defeat:[[392,370,'triangle',.16,.045,0],[349,330,'triangle',.16,.045,.16],[311,294,'triangle',.18,.045,.32],[261,130,'sawtooth',.36,.045,.48]]
-   };
-   try{
-    audioCtx=audioCtx||new(window.AudioContext||window.webkitAudioContext)();
-    if(audioCtx.state==='suspended')audioCtx.resume();
-    const seq=map[type]||map.tap;
-    for(const note of seq)playTone(...note);
-   }catch(e){}
- };
-
- const oldDestroy=destroy;
- destroy=function(f,it){oldDestroy(f,it);sfx('break')};
- const oldFinish=finish;
- finish=function(){const win=battle&&battle.a.hp>battle.b.hp;oldFinish();sfx(win?'victory':'defeat')};
-
- // 7. 非同期ゴースト対戦（GHOST ARENA：ローカル保存 ＋ Firebase併用 ＋ 公式ライバル内蔵）
- const OFFICIAL_GHOSTS=[
-  {id:'official-1',name:'公式ライバル・騎士ヒツジ',color:'#8bd0fa',orn:'star',aiStyle:'balanced',items:[
-   {id:1,type:'sword',parent:'body',x:65,y:0,angle:0,hp:24,maxHp:24},
-   {id:2,type:'shield',parent:'body',x:46,y:-46,angle:-45,hp:36,maxHp:36},
-   {id:3,type:'shield',parent:'body',x:46,y:46,angle:45,hp:36,maxHp:36}
-  ]},
-  {id:'official-2',name:'公式ライバル・重装ハンマー',color:'#ffb6ce',orn:'flame',aiStyle:'offense',items:[
-   {id:1,type:'connector',parent:'body',x:65,y:0,angle:0,hp:17,maxHp:17},
-   {id:2,type:'hammer',parent:1,x:107,y:0,angle:0,hp:27,maxHp:27},
-   {id:3,type:'weight',parent:'body',x:-65,y:0,angle:180,hp:42,maxHp:42},
-   {id:4,type:'blade',parent:'body',x:46,y:-46,angle:-35,hp:22,maxHp:22}
-  ]},
-  {id:'official-3',name:'公式ライバル・月夜のスナイパー',color:'#223344',orn:'moon',aiStyle:'defense',items:[
-   {id:1,type:'gun',parent:'body',x:65,y:-15,angle:0,hp:20,maxHp:20},
-   {id:2,type:'gun',parent:'body',x:65,y:20,angle:5,hp:20,maxHp:20},
-   {id:3,type:'shield',parent:'body',x:55,y:0,angle:0,hp:36,maxHp:36}
-  ]}
- ];
-
- function ensureGhostUi(){
-   const menu=$('#home .menu');if(!menu||$('#homeGhost'))return;
-   const btn=document.createElement('button');
-   btn.className='menu-item';
-   btn.id='homeGhost';
-   btn.innerHTML='<div class="menu-icon purple">👻</div>ゴースト対戦';
-   btn.onclick=openGhost;
-   menu.appendChild(btn);
-
-   const overlay=document.createElement('div');
-   overlay.id='ghostOverlay';
-   overlay.style.cssText='position:fixed;inset:0;z-index:10000;background:rgba(6,18,30,0.88);backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;padding:16px';
-   overlay.innerHTML=`
-    <div style="width:min(540px,100%);max-height:90dvh;overflow:auto;background:linear-gradient(180deg,#16324a 0%,#0f2336 100%);color:#fff;border:1.5px solid #5e9ec7;border-radius:18px;padding:22px">
-     <h2 style="margin:0 0 8px;text-align:center">👻 GHOST ARENA（非同期ゴースト対戦）</h2>
-     <p style="font-size:13px;color:#b8dcf2;margin:0 0 12px">現在のBUILD・本体カラー・頭の飾り・AIスタイルをゴーストとして登録し、他プレイヤーや公式ライバルのゴーストと対戦できます。</p>
-     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-      <label style="font-size:13px">AIスタイル：
-       <select id="ghostStyle" style="padding:6px 10px;background:#0c2338;border:1px solid #5e9ec7;border-radius:8px">
-        <option value="balanced">⚖ バランス</option>
-        <option value="offense">⚔ 攻撃中心</option>
-        <option value="defense">🛡 防御中心</option>
-       </select>
-      </label>
-      <button id="ghostRegister" style="background:#236b96">このBUILDを登録</button>
-      <button id="ghostFightRandom" style="background:#7c3e66">ランダム対戦</button>
-     </div>
-     <p id="ghostStatus" role="status" style="font-size:13px;background:rgba(8,21,34,0.7);padding:9px 12px;border-radius:8px;color:#ffe494">対戦相手を選択するか、ランダム対戦を押してください。</p>
-     <div id="ghostList" style="display:grid;gap:8px;margin:12px 0"></div>
-     <button id="ghostClose" style="width:100%;background:rgba(255,255,255,0.14)">閉じる</button>
-    </div>
-   `;
-   document.body.appendChild(overlay);
-   $('#ghostClose').onclick=()=>overlay.style.display='none';
-   $('#ghostRegister').onclick=registerGhost;
-   $('#ghostFightRandom').onclick=()=>fightGhost(null);
- }
-
- async function loadAllGhosts(){
-   let localList=[];
-   try{localList=JSON.parse(localStorage.getItem('sleep_arena_ghosts')||'[]');}catch(e){}
-   let remoteList=[];
-   try{
-    await connectFirebaseOnline();
-    if(onlineDb){
-     const snap=await onlineDb.ref('ghosts').limitToLast(30).get();
-     const data=snap.val()||{};
-     remoteList=Object.values(data).filter(g=>g&&Array.isArray(g.items)&&g.items.length);
-    }
-   }catch(e){}
-   const merged=[...remoteList,...localList,...OFFICIAL_GHOSTS];
-   const seen=new Set();
-   return merged.filter(g=>{
-    if(!g||!Array.isArray(g.items)||!g.items.length)return false;
-    const key=g.id||g.name;
-    if(seen.has(key))return false;
-    seen.add(key);
-    return true;
-   });
- }
-
- async function renderGhostList(){
-   const listEl=$('#ghostList');
-   if(!listEl)return;
-   listEl.innerHTML='<div style="font-size:12px;color:#9cc2dc">ゴースト一覧を読み込み中…</div>';
-   const ghosts=await loadAllGhosts();
-   const styleLabel={balanced:'⚖ バランス',offense:'⚔ 攻撃中心',defense:'🛡 防御中心'};
-   listEl.innerHTML=ghosts.map((g,idx)=>`
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:#0d2337;border:1px solid #35678a;border-radius:10px">
-     <div>
-      <strong style="font-size:14px">${g.name||'名無しのゴースト'}</strong><br>
-      <small style="color:#a7cde6">装備 ${g.items.length}個 ／ ${styleLabel[g.aiStyle]||'⚖ バランス'}</small>
-     </div>
-     <button type="button" data-ghost-idx="${idx}" style="background:#2d7cb0;padding:8px 14px">対戦 ▶</button>
-    </div>
-   `).join('');
-   listEl.querySelectorAll('[data-ghost-idx]').forEach(btn=>{
-    btn.onclick=()=>fightGhost(ghosts[+btn.dataset.ghostIdx]);
-   });
- }
-
- function openGhost(){
-   ensureGhostUi();
-   $('#ghostOverlay').style.display='flex';
-   renderGhostList();
- }
-
- function ghostRecord(){
-   return {
-    id:'local-'+Date.now(),
-    name:'GHOST-'+Math.random().toString(36).slice(2,7).toUpperCase(),
-    items:(builds[buildIndex]||[]).map(it=>({...it})),
-    color,
-    orn,
-    aiStyle:$('#ghostStyle')?.value||'balanced',
-    createdAt:Date.now()
-   };
- }
-
- async function registerGhost(){
-   const g=ghostRecord();
-   if(!g.items.length){
-    $('#ghostStatus').textContent='装備が1つもありません。BUILD画面で装備を配置してから登録してください。';
-    return;
-   }
-   let list=[];
-   try{list=JSON.parse(localStorage.getItem('sleep_arena_ghosts')||'[]')}catch(e){}
-   list.unshift(g);
-   list=list.slice(0,20);
-   try{localStorage.setItem('sleep_arena_ghosts',JSON.stringify(list));}catch(e){}
-   $('#ghostStatus').textContent='ゴーストをローカルに保存しました。';
-   try{
-    await connectFirebaseOnline();
-    if(onlineDb&&onlineUser){
-     const safe=onlineFirebaseSafe({...g,uid:onlineUser.uid});
-     await onlineDb.ref('ghosts/'+onlineUser.uid).set(safe);
-     $('#ghostStatus').textContent='ローカルとFirebaseにゴーストを登録しました！';
-    }
-   }catch(e){
-    $('#ghostStatus').textContent='ローカルには保存済みです（オンライン登録はオフラインのためスキップ）。';
-   }
-   renderGhostList();
- }
-
- async function fightGhost(selectedGhost){
-   let chosen=selectedGhost;
-   if(!chosen){
-    const all=await loadAllGhosts();
-    if(all.length)chosen=all[Math.floor(Math.random()*all.length)];
-   }
-   if(!chosen){
-    $('#ghostStatus').textContent='対戦できるゴーストが見つかりませんでした。';
-    return;
-   }
-   ghostOpponent=chosen;
-   gameMode='ghost';
-   $('#ghostOverlay').style.display='none';
-   startBattle('adaptive');
- }
-
- ensureGhostUi();
 /* ============================================================================
-   SLEEP ARENA 統合アップデート（項目 1〜8 完全実装）
+   SLEEP ARENA 統合アップデート（項目 1〜8 完全実装・単一統合版）
    ============================================================================ */
 (()=>{
  if(window.__saUnifiedPatchApplied)return;
  window.__saUnifiedPatchApplied=true;
 
  const isMobile=()=>/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)||matchMedia('(max-width: 768px)').matches||('ontouchstart' in window&&window.innerWidth<=900);
- const allStageKeys=Object.keys(stages);
+ const allStageKeys=Object.keys(stages||{});
  const pickRandomStage=()=>allStageKeys[Math.floor(Math.random()*allStageKeys.length)]||'grass';
 
  let randomStageMode=false;
@@ -2935,7 +2579,7 @@ onlineUi();
  let dqIndex=0;
 
  /* --------------------------------------------------------------------------
-    スタイル追加（ドラクエ風ホーム・GHOST ARENA・スマホ1.28倍表示・画面遷移演出）
+    スタイル追加（ドラクエ風ホーム・GHOST ARENA・スマホ拡大表示・画面遷移演出）
     -------------------------------------------------------------------------- */
  const patchStyle=document.createElement('style');
  patchStyle.textContent=`
@@ -3087,7 +2731,7 @@ onlineUi();
   .ghost-meta b{font-size:14px;color:#ffe47a;display:block}
   .ghost-badge{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:#1f4e73;color:#bfe8ff;margin-right:4px}
 
-  /* 3. スマートフォン対応・全画面・約1.28倍拡大（はみ出し防止） */
+  /* 3. スマートフォン対応・全画面・拡大表示（はみ出し防止） */
   #battle.sa-mobile-fs{
    position:fixed!important;inset:0!important;z-index:9990!important;
    width:100vw!important;height:100dvh!important;margin:0!important;padding:6px!important;
@@ -3339,7 +2983,6 @@ onlineUi();
   c.lineJoin='round';
   c.lineCap='round';
 
-  // 本体シルエット（選択カラー反映＋暗色時は明るい輪郭線に自動調整）
   c.fillStyle=bodyCol;
   c.strokeStyle=ink;
   c.lineWidth=dark?3.4:2.8;
@@ -3371,10 +3014,8 @@ onlineUi();
    c.restore();
   }
 
-  // 頭飾り（全画面共通反映）
   drawOrnamentVector(c,dec||orn,ink);
 
-  // 表情（暗色ボディ時は白ベースで視認性を確保）
   c.fillStyle=faceInk;
   c.strokeStyle=faceInk;
   c.beginPath();
@@ -3440,7 +3081,11 @@ onlineUi();
     const kind=b.powerup.kind;
     const other=f===b.a?b.b:b.a;
     if(kind==='restore'){
-     for(const it of f.items){it.hp=it.maxHp;}
+     if(Array.isArray(f.initialItems)&&f.initialItems.length){
+      f.items=f.initialItems.map(it=>({...it,hp:it.maxHp,cool:0,terrainCool:0}));
+     }else{
+      for(const it of f.items)it.hp=it.maxHp;
+     }
      const maxHp=f.maxHp||100;
      f.hp=Math.min(maxHp,f.hp+12);
      b.effects.push({x:f.x,y:f.y-102,text:'装備復元！HP+12',t:1.0});
@@ -3518,12 +3163,14 @@ onlineUi();
   const eItems=cpuItems('adaptive',battle.level||0).map(it=>({...it,hp:it.maxHp,cool:0,terrainCool:0}));
   battle.a.x=160;battle.a.y=290;battle.a.vx=0;battle.a.vy=0;
   battle.a.hp=battle.a.maxHp||100;battle.a.items=pItems;
+  battle.a.initialItems=pItems.map(i=>({...i}));
   battle.a.cool=0;battle.a.stun=0;battle.a.stunMeter=0;battle.a.clashCool=0;
   battle.a.onPlatform=null;battle.a.hurtGlow=0;battle.a.hurtJolt=0;
   battle.a.stats={damage:0,hits:0,clashes:0,stuns:0,broken:0};
 
   battle.b.x=800;battle.b.y=290;battle.b.vx=0;battle.b.vy=0;
   battle.b.hp=battle.b.maxHp||100;battle.b.items=eItems;
+  battle.b.initialItems=eItems.map(i=>({...i}));
   battle.b.cool=0;battle.b.stun=0;battle.b.stunMeter=0;battle.b.clashCool=0;
   battle.b.onPlatform=null;battle.b.hurtGlow=0;battle.b.hurtJolt=0;
   battle.b.stats={damage:0,hits:0,clashes:0,stuns:0,broken:0};
@@ -3643,7 +3290,6 @@ onlineUi();
   exitBattleFullscreen();
  };
 
- // 装備取り付け・取り外し効果音
  $('editor')?.addEventListener('pointerdown',()=>{
   setTimeout(()=>{if(selected)sfx('attach');},0);
  });
@@ -3670,10 +3316,12 @@ onlineUi();
     applyTrainingAiStyle(battle.b);
    }
    if(gameMode==='ghost'&&ghostOpponent&&battle.b){
-    battle.b.items=(ghostOpponent.items||[]).map(it=>{
+    const gItems=(ghostOpponent.items||[]).map(it=>{
      const mhp=Number(it.maxHp)||defs[it.type]?.hp||24;
      return {...it,hp:mhp,maxHp:mhp,cool:0,terrainCool:0};
     });
+    battle.b.items=gItems;
+    battle.b.initialItems=gItems.map(i=>({...i}));
     battle.b.color=ghostOpponent.color||'#ffc1c8';
     battle.b.orn=ghostOpponent.orn||'star';
     const gStyle=ghostOpponent.aiStyle||'balanced';
@@ -3717,7 +3365,6 @@ onlineUi();
   }
  };
 
- // 装備復元アイテムのオーブ描画
  const origDrawBattleFn=drawBattle;
  drawBattle=function(){
   origDrawBattleFn();
@@ -3743,7 +3390,6 @@ onlineUi();
   }
  };
 
- // オンライン対戦：ホストとゲストのステージ同期
  if(typeof onlineDb!=='undefined'){
   setInterval(()=>{
    if(gameMode==='online'&&onlineSession&&!onlineSession.isHost&&onlineDb&&onlineSession.code&&battle){
@@ -3768,7 +3414,7 @@ onlineUi();
  const GHOST_LOCAL_KEY='sleep_arena_ghosts_v2';
  const OFFICIAL_RIVALS=[
   {
-   id:'official-paladin',name:'【公式】白銀の守護騎士',author:'OFFICIAL RIVAL',color:'#d5e2e8',orn:'shield' in defs?'diamond':'star',aiStyle:'defense',
+   id:'official-paladin',name:'【公式】白銀の守護騎士',author:'OFFICIAL RIVAL',color:'#d5e2e8',orn:'diamond',aiStyle:'defense',
    items:[
     {id:1,type:'shield',parent:'body',x:64,y:-8,angle:0,hp:36,maxHp:36},
     {id:2,type:'shield',parent:'body',x:52,y:38,angle:35,hp:36,maxHp:36},
@@ -4027,7 +3673,6 @@ onlineUi();
  function renderDqHomeMenu(){
   const home=$('home');
   if(!home)return;
-  // 重複しているホームのトーナメントボタン等を排除し、ドラクエ風コマンドウィンドウを構築
   if($('homeTournament'))$('homeTournament').remove();
   if($('homeOnline'))$('homeOnline').remove();
   if($('homeGhost'))$('homeGhost').remove();
