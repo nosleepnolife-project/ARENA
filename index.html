@@ -2563,7 +2563,7 @@ onlineUi();
 </script>
 <script>
 /* ============================================================================
-   SLEEP ARENA 統合アップデート（項目 1〜8 完全実装・単一統合版）
+   SLEEP ARENA 統合アップデート（タイトル画面ドラクエ化 ＋ メニュー画面復元版）
    ============================================================================ */
 (()=>{
  if(window.__saUnifiedPatchApplied)return;
@@ -2576,69 +2576,107 @@ onlineUi();
  let randomStageMode=false;
  let trainingStyle='balanced';
  let ghostOpponent=null;
- let dqIndex=0;
+ let dqTitleIndex=0;
 
  /* --------------------------------------------------------------------------
-    スタイル追加（ドラクエ風ホーム・GHOST ARENA・スマホ拡大表示・画面遷移演出）
+    スタイル定義（ドラクエ風タイトル画面・GHOST ARENA・スマホ拡大表示）
     -------------------------------------------------------------------------- */
  const patchStyle=document.createElement('style');
  patchStyle.textContent=`
   /* 画面遷移フェード＆スライド演出 */
-  .screen.on{animation:saSlideFade .26s cubic-bezier(.22,.8,.36,1) both!important}
+  .screen.on{
+   opacity:1;
+   animation:saSlideFade .22s ease-out;
+  }
   @keyframes saSlideFade{
-   from{opacity:0;transform:translateY(12px) scale(.992)}
+   from{opacity:0;transform:translateY(10px)}
    to{opacity:1;transform:none}
   }
 
-  /* 8. ドラクエ風ホーム画面 */
-  #home.screen.on{
-   background:radial-gradient(circle at 50% 25%,#122038 0%,#060911 72%)!important;
+  /* タイトル画面（#title）をドラクエ風にする */
+  #title.screen.on{
+   background:radial-gradient(circle at 50% 24%,#18305c 0%,#091226 60%,#04070f 100%)!important;
    display:flex!important;
    flex-direction:column;
    align-items:center;
    justify-content:center;
-   padding:16px!important;
+   padding:18px 14px!important;
+   min-height:100dvh;
+   box-sizing:border-box;
+   position:relative;
+   overflow-y:auto;
   }
-  #home .titlebar{display:none!important}
-  #home .menu{display:none!important}
-  .dq-wrap{
-   width:min(560px,96vw);
+  #title > :not(.dq-title-wrap):not(.dq-stars){
+   display:none!important;
+  }
+  .dq-stars{
+   position:absolute;
+   inset:0;
+   pointer-events:none;
+   background-image:
+    radial-gradient(2px 2px at 12% 18%,#ffffffcc 50%,transparent 100%),
+    radial-gradient(2px 2px at 28% 34%,#ffe98acc 50%,transparent 100%),
+    radial-gradient(1.5px 1.5px at 44% 12%,#ffffffaa 50%,transparent 100%),
+    radial-gradient(2px 2px at 67% 22%,#9be2ffcc 50%,transparent 100%),
+    radial-gradient(1.5px 1.5px at 83% 15%,#ffffffcc 50%,transparent 100%),
+    radial-gradient(2px 2px at 90% 42%,#ffe98aaa 50%,transparent 100%),
+    radial-gradient(1.5px 1.5px at 18% 72%,#9be2ffaa 50%,transparent 100%),
+    radial-gradient(2px 2px at 78% 78%,#ffffffaa 50%,transparent 100%);
+  }
+  .dq-title-wrap{
+   position:relative;
+   z-index:2;
+   width:min(540px,95vw);
    display:flex;
    flex-direction:column;
+   align-items:center;
    gap:14px;
    font-family:"Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP",monospace,sans-serif;
   }
+  .dq-logo-area{
+   text-align:center;
+   margin-bottom:2px;
+  }
+  .dq-emblem{
+   width:86px;
+   height:86px;
+   margin:0 auto 8px;
+   background:#070b14;
+   border:3px solid #ffffff;
+   border-radius:12px;
+   box-shadow:0 0 0 3px #070b14,0 8px 24px rgba(0,0,0,.65),inset 0 0 0 2px #8fb4d8;
+   display:flex;
+   align-items:center;
+   justify-content:center;
+  }
+  .dq-main-logo{
+   margin:0;
+   font-size:clamp(30px,7vw,48px);
+   font-weight:900;
+   letter-spacing:4px;
+   line-height:1.1;
+   background:linear-gradient(180deg,#fff7b2 0%,#ffd24c 52%,#d98a1c 100%);
+   -webkit-background-clip:text;
+   -webkit-text-fill-color:transparent;
+   filter:drop-shadow(0 3px 0 #000) drop-shadow(0 0 14px rgba(255,210,76,.35));
+  }
+  .dq-sub-logo{
+   margin:6px 0 0;
+   font-size:13px;
+   font-weight:800;
+   letter-spacing:4px;
+   color:#cde6ff;
+   text-shadow:1px 1px 0 #000;
+  }
   .dq-window{
+   width:100%;
+   box-sizing:border-box;
    background:#070b14;
    color:#ffffff;
    border:3px solid #ffffff;
    border-radius:10px;
    box-shadow:0 0 0 3px #070b14,0 14px 36px rgba(0,0,0,.75),inset 0 0 0 2px #8fb4d8;
-   padding:18px 22px;
-  }
-  .dq-header{
-   display:flex;
-   align-items:center;
-   justify-content:space-between;
-   border-bottom:2px solid #ffffff55;
-   padding-bottom:10px;
-   margin-bottom:14px;
-  }
-  .dq-title{
-   font-size:clamp(22px,4.5vw,30px);
-   font-weight:900;
-   letter-spacing:3px;
-   color:#ffe66d;
-   text-shadow:2px 2px 0 #000;
-  }
-  .dq-back-btn{
-   background:#0d1626!important;
-   color:#fff!important;
-   border:2px solid #fff!important;
-   border-radius:6px!important;
-   padding:6px 12px!important;
-   font-size:12px!important;
-   min-height:34px!important;
+   padding:16px 20px;
   }
   .dq-list{
    list-style:none;
@@ -2651,16 +2689,16 @@ onlineUi();
   .dq-item{
    display:flex;
    align-items:center;
-   gap:12px;
+   gap:10px;
    padding:11px 14px;
    border-radius:7px;
    border:2px solid transparent;
-   font-size:clamp(17px,3.6vw,21px);
+   font-size:clamp(17px,3.8vw,21px);
    font-weight:900;
    letter-spacing:1.5px;
    cursor:pointer;
    user-select:none;
-   transition:background .12s,border-color .12s,transform .1s;
+   transition:background .12s,border-color .12s;
   }
   .dq-item .dq-cursor{
    display:inline-block;
@@ -2670,7 +2708,7 @@ onlineUi();
    transform:translateX(-4px);
   }
   .dq-item.active{
-   background:rgba(255,255,255,.12);
+   background:rgba(255,255,255,.13);
    border-color:#ffffff;
    color:#ffe66d;
   }
@@ -2679,7 +2717,7 @@ onlineUi();
    transform:none;
    animation:dqBlink .75s steps(2,end) infinite;
   }
-  @keyframes dqBlink{50%{opacity:.35}}
+  @keyframes dqBlink{50%{opacity:.3}}
   .dq-item .dq-tag{
    margin-left:auto;
    font-size:11px;
@@ -2690,23 +2728,23 @@ onlineUi();
    letter-spacing:0;
   }
   .dq-guide{
-   margin-top:14px;
+   margin-top:12px;
    padding-top:10px;
    border-top:2px solid #ffffff55;
    text-align:center;
-   font-size:13px;
+   font-size:12px;
    color:#d8ecff;
    letter-spacing:1.5px;
   }
-  .dq-desc-box{
-   min-height:66px;
+  .dq-msg-box{
    font-size:14px;
-   line-height:1.65;
+   line-height:1.7;
    color:#f2f8ff;
+   min-height:68px;
   }
-  .dq-desc-box strong{color:#ffe66d}
+  .dq-msg-box strong{color:#ffe66d}
 
-  /* 7. GHOST ARENA モーダル */
+  /* GHOST ARENA モーダル */
   #ghostModal{
    position:fixed;inset:0;z-index:10050;
    background:rgba(5,12,24,.88);backdrop-filter:blur(6px);
@@ -2731,7 +2769,7 @@ onlineUi();
   .ghost-meta b{font-size:14px;color:#ffe47a;display:block}
   .ghost-badge{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:#1f4e73;color:#bfe8ff;margin-right:4px}
 
-  /* 3. スマートフォン対応・全画面・拡大表示（はみ出し防止） */
+  /* スマートフォン対応・全画面・拡大表示（はみ出し防止） */
   #battle.sa-mobile-fs{
    position:fixed!important;inset:0!important;z-index:9990!important;
    width:100vw!important;height:100dvh!important;margin:0!important;padding:6px!important;
@@ -2754,7 +2792,7 @@ onlineUi();
  document.head.appendChild(patchStyle);
 
  /* --------------------------------------------------------------------------
-    4. 効果音の強化（Web Audio API・外部ファイル不要・18種類 + UI音）
+    効果音の強化（Web Audio API・外部ファイル不要・18種類 + UI音）
     -------------------------------------------------------------------------- */
  function ensureAudio(){
   if(!soundOn)return null;
@@ -2890,7 +2928,7 @@ onlineUi();
  };
 
  /* --------------------------------------------------------------------------
-    1. キャラクター見た目改善（カラー統一・全頭飾り描画・暗色時コントラスト自動調整）
+    キャラクター見た目改善（カラー統一・全頭飾り描画・暗色時コントラスト自動調整）
     -------------------------------------------------------------------------- */
  function isDarkHex(hex){
   const m=String(hex||'').trim().match(/^#?([0-9a-f]{6})$/i);
@@ -3036,7 +3074,7 @@ onlineUi();
  };
 
  /* --------------------------------------------------------------------------
-    5. ランダムステージ（全25種・トーナメント各戦・オンライン同期・ログ表示）
+    ランダムステージ（全25種・トーナメント各戦・オンライン同期・ログ表示）
     -------------------------------------------------------------------------- */
  const origRenderStages=renderStages;
  renderStages=function(){
@@ -3062,7 +3100,7 @@ onlineUi();
  };
 
  /* --------------------------------------------------------------------------
-    2. 装備復元アイテム & 足場ステージでのスーパージャンプ出現禁止
+    装備復元アイテム & 足場ステージでのスーパージャンプ出現禁止
     -------------------------------------------------------------------------- */
  function stageHasPlatforms(b){
   if(!b)return false;
@@ -3127,7 +3165,7 @@ onlineUi();
  }
 
  /* --------------------------------------------------------------------------
-    3 & 6. スマホ全画面切替ボタン ＋ トレーニングCPU方針＆練習リセット
+    スマホ全画面切替ボタン ＋ トレーニングCPU方針＆練習リセット
     -------------------------------------------------------------------------- */
  function enterBattleFullscreen(){
   const el=$('battle');
@@ -3246,7 +3284,7 @@ onlineUi();
  })();
 
  /* --------------------------------------------------------------------------
-    18種効果音のゲームイベント連動フック
+    効果音のゲームイベント連動フック
     -------------------------------------------------------------------------- */
  const origHit=hit;
  hit=function(att,def,it,shield){
@@ -3297,7 +3335,7 @@ onlineUi();
  $('clear')?.addEventListener('click',()=>{if(!resetArmed)sfx('detach');});
 
  /* --------------------------------------------------------------------------
-    バトル開始・更新・描画の統合フック（ランダムステージ・装備復元・オンライン同期）
+    バトル開始・更新・描画の統合フック
     -------------------------------------------------------------------------- */
  const origStartBattle=startBattle;
  startBattle=function(kind='adaptive',continuation=false){
@@ -3408,7 +3446,7 @@ onlineUi();
  }
 
  /* --------------------------------------------------------------------------
-    7. GHOST ARENA（オンライン＆ローカル登録・一覧選択・公式ライバル常設）
+    GHOST ARENA（オンライン＆ローカル登録・一覧選択・公式ライバル常設）
     -------------------------------------------------------------------------- */
  MODES.ghost='GHOST ARENA';
  const GHOST_LOCAL_KEY='sleep_arena_ghosts_v2';
@@ -3629,140 +3667,185 @@ onlineUi();
  }
 
  /* --------------------------------------------------------------------------
-    8. ホーム画面をドラクエ風の選択式コマンドメニューへ刷新
+    メニュー画面（#home）を元の画面に戻し、追加ボタンをメニューに統合
     -------------------------------------------------------------------------- */
- const DQ_COMMANDS=[
+ function ensureHomeMenuRestored(){
+  const home=$('home');
+  if(!home)return;
+  home.querySelectorAll('.dq-wrap').forEach(el=>el.remove());
+  home.style.opacity='1';
+  home.style.pointerEvents='auto';
+
+  const menu=home.querySelector('.menu');
+  if(!menu)return;
+
+  if(!$('homeGhost')){
+   const gb=document.createElement('button');
+   gb.className='menu-item';
+   gb.id='homeGhost';
+   gb.innerHTML='<div class="menu-icon">👻</div>GHOST ARENA';
+   gb.addEventListener('click',()=>{sfx('decide');openGhostArena();});
+   menu.appendChild(gb);
+  }
+  if(!$('homeOnline')&&typeof openOnlinePanel==='function'){
+   const ob=document.createElement('button');
+   ob.className='menu-item';
+   ob.id='homeOnline';
+   ob.innerHTML='<div class="menu-icon blue">🌐</div>オンライン対戦';
+   ob.addEventListener('click',()=>{sfx('decide');openOnlinePanel();});
+   menu.appendChild(ob);
+  }
+ }
+
+ /* --------------------------------------------------------------------------
+    タイトル画面（#title）をドラクエ風の選択式コマンド画面へ刷新
+    -------------------------------------------------------------------------- */
+ const DQ_TITLE_COMMANDS=[
   {
-   label:'バトル',
+   label:'ぼうけんを はじめる',
+   tag:'MENU',
+   action:()=>go('home')
+  },
+  {
+   label:'クイックバトル',
    tag:'BATTLE',
-   desc:'<strong>【バトル】</strong> 通常バトル・3本勝負・トーナメントなどの対戦モードを選択して戦います。',
-   action:()=>go('modes')
+   action:()=>{gameMode='single';matchWins=[0,0];matchRound=0;go('stages');}
   },
   {
-   label:'装備・BUILD',
-   tag:'BUILD',
-   desc:'<strong>【装備・BUILD】</strong> 剣・盾・銃・接続パーツを自由に配置し、最大3つのオリジナル機体を編成します。',
-   action:()=>go('equip')
-  },
-  {
-   label:'トレーニング',
-   tag:'TRAIN',
-   desc:'<strong>【トレーニング】</strong> 倒れないCPUを相手に、行動方針（バランス・攻撃・防御）やリセット機能を使って練習します。',
-   action:()=>{gameMode='training';matchWins=[0,0];matchRound=0;go('stages');}
-  },
-  {
-   label:'GHOST ARENA',
-   tag:'GHOST',
-   desc:'<strong>【GHOST ARENA】</strong> 自分のBUILD・カラー・頭飾り・AI方針を登録し、他プレイヤーや公式ライバルのゴーストと非同期対戦します。',
-   action:()=>openGhostArena()
-  },
-  {
-   label:'オンライン対戦',
-   tag:'ONLINE',
-   desc:'<strong>【オンライン対戦】</strong> ルーム作成・参加やランダムマッチで、他プレイヤーとリアルタイム通信対戦を行います。',
-   action:()=>{if(typeof openOnlinePanel==='function')openOnlinePanel();}
-  },
-  {
-   label:'オプション',
+   label:'せってい',
    tag:'OPTION',
-   desc:'<strong>【オプション】</strong> 羊キャラクターの本体カラー・頭の飾り・効果音（SE）のON/OFFを設定します。',
    action:()=>go('options')
   }
  ];
 
- function renderDqHomeMenu(){
-  const home=$('home');
-  if(!home)return;
-  if($('homeTournament'))$('homeTournament').remove();
-  if($('homeOnline'))$('homeOnline').remove();
-  if($('homeGhost'))$('homeGhost').remove();
+ function getDqTitleMessage(){
+  const wins=Number.isFinite(cpuWins)?cpuWins:0;
+  const bNum=(Number.isFinite(buildIndex)?buildIndex:0)+1;
+  const pCount=(builds?.[buildIndex]||[]).length;
+  return `＊「ようこそ <strong>SLEEP ARENA</strong> の せかいへ！<br> つう算しょうり：<strong>${wins}かい</strong> ／ BUILD ${bNum}（そうび ${pCount}こ）」`;
+ }
 
-  let wrap=home.querySelector('.dq-wrap');
-  if(!wrap){
-   wrap=document.createElement('div');
-   wrap.className='dq-wrap';
-   wrap.innerHTML=`
-    <div class="dq-window">
-     <div class="dq-header">
-      <div class="dq-title">SLEEP ARENA</div>
-      <button type="button" class="dq-back-btn" id="dqTitleBack">タイトルへ</button>
-     </div>
-     <ul class="dq-list" id="dqCommandList" role="listbox" aria-label="コマンド選択"></ul>
-     <div class="dq-guide">↑↓で選択 決定で進む</div>
-    </div>
-    <div class="dq-window dq-desc-box" id="dqDescBox"></div>
-   `;
-   home.appendChild(wrap);
-   $('dqTitleBack').onclick=()=>{sfx('cursor');go('title');};
+ function drawDqTitleEmblem(){
+  const cv=$('dqTitleEmblemCanvas');
+  if(!cv)return;
+  const c=cv.getContext('2d');
+  c.clearRect(0,0,cv.width,cv.height);
+  sprite(c,cv.width/2,cv.height/2+7,58,color,orn);
+ }
+
+ function updateDqTitleSelection(){
+  const listEl=$('dqTitleCommandList');
+  if(!listEl)return;
+  listEl.querySelectorAll('.dq-item').forEach((el,i)=>{
+   const active=i===dqTitleIndex;
+   el.classList.toggle('active',active);
+   el.setAttribute('aria-selected',String(active));
+  });
+  if($('dqTitleMsgBox'))$('dqTitleMsgBox').innerHTML=getDqTitleMessage();
+  drawDqTitleEmblem();
+ }
+
+ function renderDqTitleScreen(){
+  const titleEl=$('title');
+  if(!titleEl)return;
+
+  if(!titleEl.querySelector('.dq-stars')){
+   const stars=document.createElement('div');
+   stars.className='dq-stars';
+   titleEl.prepend(stars);
   }
 
-  const listEl=$('dqCommandList');
-  listEl.innerHTML=DQ_COMMANDS.map((cmd,i)=>`
-   <li class="dq-item ${i===dqIndex?'active':''}" data-dq-idx="${i}" role="option" aria-selected="${i===dqIndex}">
+  let wrap=titleEl.querySelector('.dq-title-wrap');
+  if(!wrap){
+   wrap=document.createElement('div');
+   wrap.className='dq-title-wrap';
+   wrap.innerHTML=`
+    <div class="dq-logo-area">
+     <div class="dq-emblem">
+      <canvas id="dqTitleEmblemCanvas" width="76" height="76"></canvas>
+     </div>
+     <h1 class="dq-main-logo">SLEEP ARENA</h1>
+     <p class="dq-sub-logo">〜 ねむりの とうぎじょう 〜</p>
+    </div>
+    <div class="dq-window">
+     <ul class="dq-list" id="dqTitleCommandList" role="listbox" aria-label="タイトルコマンド"></ul>
+     <div class="dq-guide">↑↓ / タップで選択 決定で進む</div>
+    </div>
+    <div class="dq-window dq-msg-box" id="dqTitleMsgBox"></div>
+   `;
+   titleEl.appendChild(wrap);
+  }
+
+  const listEl=$('dqTitleCommandList');
+  listEl.innerHTML=DQ_TITLE_COMMANDS.map((cmd,i)=>`
+   <li class="dq-item ${i===dqTitleIndex?'active':''}" data-dq-title-idx="${i}" role="option" aria-selected="${i===dqTitleIndex}">
     <span class="dq-cursor">▶</span>
     <span>${cmd.label}</span>
     <span class="dq-tag">${cmd.tag}</span>
    </li>
   `).join('');
 
-  $('dqDescBox').innerHTML=DQ_COMMANDS[dqIndex].desc;
-
   listEl.querySelectorAll('.dq-item').forEach(el=>{
-   const idx=Number(el.dataset.dqIdx);
+   const idx=Number(el.dataset.dqTitleIdx);
    el.onmouseenter=()=>{
-    if(dqIndex!==idx){
-     dqIndex=idx;
+    if(dqTitleIndex!==idx){
+     dqTitleIndex=idx;
      sfx('cursor');
-     updateDqSelection();
+     updateDqTitleSelection();
     }
    };
    el.onclick=()=>{
-    dqIndex=idx;
-    updateDqSelection();
+    dqTitleIndex=idx;
+    updateDqTitleSelection();
     sfx('decide');
-    DQ_COMMANDS[idx].action();
+    DQ_TITLE_COMMANDS[idx].action();
    };
   });
+
+  updateDqTitleSelection();
  }
 
- function updateDqSelection(){
-  const listEl=$('dqCommandList');
-  if(!listEl)return;
-  listEl.querySelectorAll('.dq-item').forEach((el,i)=>{
-   const active=i===dqIndex;
-   el.classList.toggle('active',active);
-   el.setAttribute('aria-selected',String(active));
-  });
-  if($('dqDescBox'))$('dqDescBox').innerHTML=DQ_COMMANDS[dqIndex].desc;
- }
+ const origDrawTitle=typeof drawTitle==='function'?drawTitle:null;
+ drawTitle=function(){
+  if(origDrawTitle){
+   try{origDrawTitle();}catch(e){}
+  }
+  renderDqTitleScreen();
+ };
 
  document.addEventListener('keydown',e=>{
-  if(screen!=='home')return;
+  if(screen!=='title')return;
   if($('ghostModal')?.style.display==='flex')return;
   if($('onlineOverlay')?.style.display==='flex')return;
   if(e.key==='ArrowUp'||e.key==='w'||e.key==='W'){
    e.preventDefault();
-   dqIndex=(dqIndex-1+DQ_COMMANDS.length)%DQ_COMMANDS.length;
+   dqTitleIndex=(dqTitleIndex-1+DQ_TITLE_COMMANDS.length)%DQ_TITLE_COMMANDS.length;
    sfx('cursor');
-   updateDqSelection();
+   updateDqTitleSelection();
   }else if(e.key==='ArrowDown'||e.key==='s'||e.key==='S'){
    e.preventDefault();
-   dqIndex=(dqIndex+1)%DQ_COMMANDS.length;
+   dqTitleIndex=(dqTitleIndex+1)%DQ_TITLE_COMMANDS.length;
    sfx('cursor');
-   updateDqSelection();
+   updateDqTitleSelection();
   }else if(e.key==='Enter'||e.key===' '){
    e.preventDefault();
    sfx('decide');
-   DQ_COMMANDS[dqIndex].action();
+   DQ_TITLE_COMMANDS[dqTitleIndex].action();
   }
  });
 
  const origGoHook=go;
  go=function(next){
   if(next!=='battle')exitBattleFullscreen();
-  origGoHook(next);
-  if(next==='home')renderDqHomeMenu();
-  if(next==='title')drawTitle();
+  try{
+   origGoHook(next);
+  }catch(e){
+   console.warn('go error',e);
+   document.querySelectorAll('.screen').forEach(el=>el.classList.toggle('on',el.id===next));
+   try{screen=next;}catch(_){}
+  }
+  if(next==='title')renderDqTitleScreen();
+  if(next==='home')ensureHomeMenuRestored();
   if(next==='equip')renderEquip();
   if(next==='options')renderOptions();
   if($('trainingBarControls')){
@@ -3771,7 +3854,8 @@ onlineUi();
  };
 
  // 初期描画の反映
- renderDqHomeMenu();
+ ensureHomeMenuRestored();
+ renderDqTitleScreen();
  drawTitle();
  renderEquip();
  renderOptions();
